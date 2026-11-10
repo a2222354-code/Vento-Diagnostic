@@ -42,25 +42,26 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
+      - name: 3. Настройка Android SDK и лицензий
+        uses: android-actions/setup-android@v3
 
-      - name: 3. Установка Gradle 8.4
+      - name: 4. Установка Gradle 8.4
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.4'
 
-      - name: 4. Компиляция Debug APK
+      - name: 5. Компиляция Debug APK
         run: |
           if [ -d "android" ]; then
             cd android
           fi
           gradle assembleDebug --stacktrace --no-daemon
 
-      - name: 5. Выгрузка готового APK в артефакты
+      - name: 6. Выгрузка готового APK в артефакты
         uses: actions/upload-artifact@v4
         with:
           name: kw1281-vento-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: "**/app/build/outputs/apk/debug/app-debug.apk"
           retention-days: 14
 `
   },

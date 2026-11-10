@@ -5,6 +5,7 @@ import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import com.hoho.android.usbserial.driver.FtdiSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
+import com.hoho.android.usbserial.driver.UsbSerialProber
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -27,7 +28,8 @@ class Ftdi5BaudDriver(
 
     suspend fun open(): Boolean = withContext(Dispatchers.IO) {
         connection = usbManager.openDevice(device) ?: return@withContext false
-        val driver = FtdiSerialDriver(device)
+        val driver = UsbSerialProber.getDefaultProber().probeDevice(device) ?: FtdiSerialDriver(device)
+        if (driver.ports.isEmpty()) return@withContext false
         port = driver.ports[0]
         port?.open(connection)
         

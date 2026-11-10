@@ -22,20 +22,23 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: 3. Set up Gradle 8.4
+      - name: 3. Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 4. Set up Gradle 8.4
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.4'
 
-      - name: 4. Build Debug APK with Gradle
+      - name: 5. Build Debug APK with Gradle
         run: |
           if [ -d "android" ]; then
             cd android
           fi
-          echo "Current directory: $(pwd)"
+          echo "Working directory: $(pwd)"
           gradle assembleDebug --stacktrace --no-daemon
 
-      - name: 5. Upload Debug APK Artifact
+      - name: 6. Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: kw1281-vento-debug-apk
