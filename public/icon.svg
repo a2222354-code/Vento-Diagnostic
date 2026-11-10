@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0b1329"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="cyanGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#ef4444"/>
+    </linearGradient>
+  </defs>
+  <!-- Background squircle -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="16" y="16" width="480" height="480" rx="96" stroke="#1e293b" stroke-width="4" stroke-opacity="0.8"/>
+  
+  <!-- Outer Diagnostic Dial Arc -->
+  <path d="M 120 360 A 160 160 0 1 1 392 360" stroke="#334155" stroke-width="24" stroke-linecap="round"/>
+  <path d="M 120 360 A 160 160 0 1 1 320 150" stroke="url(#cyanGrad)" stroke-width="24" stroke-linecap="round"/>
+
+  <!-- Gauge Ticks -->
+  <line x1="256" y1="96" x2="256" y2="120" stroke="#38bdf8" stroke-width="6" stroke-linecap="round"/>
+  <line x1="180" y1="124" x2="196" y2="142" stroke="#64748b" stroke-width="6" stroke-linecap="round"/>
+  <line x1="332" y1="124" x2="316" y2="142" stroke="#38bdf8" stroke-width="6" stroke-linecap="round"/>
+  <line x1="124" y1="190" x2="148" y2="198" stroke="#64748b" stroke-width="6" stroke-linecap="round"/>
+  <line x1="388" y1="190" x2="364" y2="198" stroke="#f59e0b" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- K-Line Waveform & OBD plug graphic -->
+  <path d="M 170 340 L 210 340 L 225 310 L 245 370 L 265 290 L 285 350 L 300 340 L 342 340" 
+        stroke="url(#cyanGrad)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- Engine / ECU Icon Outline in center -->
+  <path d="M 216 200 L 296 200 L 306 220 L 326 220 L 326 240 L 340 240 L 340 270 L 326 270 L 326 290 L 186 290 L 186 270 L 172 270 L 172 240 L 186 240 L 186 220 L 206 220 Z" 
+        fill="#0f172a" stroke="#e2e8f0" stroke-width="10" stroke-linejoin="round"/>
+  <circle cx="236" cy="246" r="10" fill="#38bdf8"/>
+  <circle cx="276" cy="246" r="10" fill="#38bdf8"/>
+
+  <!-- KW 1281 Text Label in automotive font -->
+  <text x="256" y="420" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="34" font-weight="800" fill="#f8fafc" letter-spacing="4">KW1281</text>
+  <text x="256" y="452" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="600" fill="#94a3b8" letter-spacing="2">MONO-MOTRONIC</text>
+</svg>

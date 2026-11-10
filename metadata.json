@@ -1,0 +1,6 @@
+{
+  "name": "VAG KW1281 Android Diag",
+  "description": "Диагностическое приложение для VW Vento (Mono-Motronic 1.2.3, 3A0 907 311) по протоколу KW1281 через USB KKL FT232.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

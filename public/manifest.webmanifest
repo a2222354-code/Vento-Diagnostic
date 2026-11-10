@@ -1,0 +1,33 @@
+{
+  "id": "/",
+  "name": "VAG KW1281 Android Diag",
+  "short_name": "KW1281 Diag",
+  "description": "Диагностика VW Vento 1.8 Mono-Motronic 1.2.3 (3A0 907 311) через FT232 KKL",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#090d16",
+  "theme_color": "#090d16",
+  "categories": ["utilities", "auto"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
