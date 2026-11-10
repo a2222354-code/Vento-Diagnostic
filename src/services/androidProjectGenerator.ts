@@ -44,17 +44,17 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: 3. Установка прав на запуск gradlew
-        run: |
-          if [ -f gradlew ]; then
-            chmod +x gradlew
-          else
-            gradle wrapper --gradle-version 8.4
-            chmod +x gradlew
-          fi
+      - name: 3. Установка Gradle 8.4
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.4'
 
       - name: 4. Компиляция Debug APK
-        run: ./gradlew assembleDebug --stacktrace --no-daemon
+        run: |
+          if [ -d "android" ]; then
+            cd android
+          fi
+          gradle assembleDebug --stacktrace --no-daemon
 
       - name: 5. Выгрузка готового APK в артефакты
         uses: actions/upload-artifact@v4

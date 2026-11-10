@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -53,14 +54,21 @@ class MainActivity : ComponentActivity() {
             this, 0, Intent(ACTION_USB_PERMISSION), flags
         )
         val filter = IntentFilter(ACTION_USB_PERMISSION)
-        registerReceiver(object : BroadcastReceiver() {
+        val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (ACTION_USB_PERMISSION == intent?.action) {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                    // Разрешение USB получено
+                    // USB permission granted
                 }
             }
-        }, filter, Context.RECEIVER_NOT_EXPORTED)
+        }
+        
+        ContextCompat.registerReceiver(
+            this,
+            receiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
 
         usbManager.requestPermission(device, permissionIntent)
     }
