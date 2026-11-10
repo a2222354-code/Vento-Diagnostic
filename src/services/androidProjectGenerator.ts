@@ -8,12 +8,62 @@ import JSZip from 'jszip';
 export interface AndroidProjectFile {
   path: string;
   filename: string;
-  language: 'kotlin' | 'xml' | 'groovy' | 'markdown';
+  language: 'kotlin' | 'xml' | 'groovy' | 'markdown' | 'yaml' | 'properties';
   description: string;
   content: string;
 }
 
 export const ANDROID_PROJECT_FILES: AndroidProjectFile[] = [
+  {
+    path: '.github/workflows/build-apk.yml',
+    filename: 'build-apk.yml',
+    language: 'yaml',
+    description: 'GitHub Actions воркфлоу для автоматической сборки APK в облаке GitHub',
+    content: `name: Build Android APK (KW1281 Diag)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch: # Позволяет запускать сборку вручную кнопкой в GitHub UI
+
+jobs:
+  build:
+    name: Build Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Клонирование репозитория
+        uses: actions/checkout@v4
+
+      - name: 2. Установка Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: 3. Установка прав на запуск gradlew
+        run: |
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+          else
+            gradle wrapper --gradle-version 8.4
+            chmod +x gradlew
+          fi
+
+      - name: 4. Компиляция Debug APK
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
+
+      - name: 5. Выгрузка готового APK в артефакты
+        uses: actions/upload-artifact@v4
+        with:
+          name: kw1281-vento-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+`
+  },
   {
     path: 'app/src/main/java/com/vag/kw1281/Ftdi5BaudDriver.kt',
     filename: 'Ftdi5BaudDriver.kt',
@@ -43,14 +93,8 @@ class Ftdi5BaudDriver(
     private var connection: UsbDeviceConnection? = null
     private var port: UsbSerialPort? = null
 
-    // FTDI USB Control Requests
     companion object {
-        private const val FTDI_SIO_SET_BITMODE_REQUEST = 0x0B
-        private const val FTDI_BITMODE_RESET = 0x00
-        private const val FTDI_BITMODE_BITBANG = 0x01
-        
-        // 5 бод = 200 мс на 1 бит
-        private const val BIT_TIME_MS = 200L
+        private const val BIT_TIME_MS = 200L // 5 бод = 200 мс на 1 бит
     }
 
     /**
@@ -111,7 +155,7 @@ class Ftdi5BaudDriver(
 
             onLog("5-бодовая посылка завершена (2000 мс). Переключение на 9600 бод...")
 
-            // 5. Переключение в рабочий режим 9600 бод 8N1 (или 7O1 в зависимости от ЭБУ)
+            // 5. Переключение в рабочий режим 9600 бод 8N1
             p.setParameters(9600, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
             true
         } catch (e: Exception) {
@@ -120,16 +164,10 @@ class Ftdi5BaudDriver(
         }
     }
 
-    /**
-     * Чтение байт ответа из K-Line
-     */
     suspend fun readBytes(buffer: ByteArray, timeoutMs: Int): Int = withContext(Dispatchers.IO) {
         port?.read(buffer, timeoutMs) ?: -1
     }
 
-    /**
-     * Отправка байтов в K-Line
-     */
     suspend fun writeBytes(data: ByteArray, timeoutMs: Int) = withContext(Dispatchers.IO) {
         port?.write(data, timeoutMs)
     }
@@ -186,7 +224,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             onLog("Синхробайт 0x55 не получен. Проверьте зажигание и подключение K-Line.")
             return@withContext false
         }
-        onLog("Получен Sync Byte: 0x55! Скорость связи синхронизирована.")
+        onLog("Получен Sync Byte: 0x55! Скорость связи синхронизирована: 9600 бод.")
 
         // 3. Чтение KeyBytes
         val readKb = driver.readBytes(buf, 1000)
@@ -220,7 +258,6 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     1 -> { ecuComponent = text; onLog("ЭБУ Версия: $text") }
                     2 -> { ecuExtra = text; onLog("ЭБУ Кодировка: $text") }
                 }
-                // Отправка ACK блока
                 sendAckBlock()
             }
         }
@@ -232,9 +269,6 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         driver.writeBytes(ack, 500)
     }
 
-    /**
-     * Запрос кодов ошибок (0x07)
-     */
     suspend fun readFaultCodes(onLog: (String) -> Unit): List<String> = withContext(Dispatchers.IO) {
         blockCounter++
         val req = byteArrayOf(0x03, (blockCounter and 0xFF).toByte(), 0x07, 0x03)
@@ -255,9 +289,6 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         faults
     }
 
-    /**
-     * Стирание кодов ошибок (0x05)
-     */
     suspend fun clearFaultCodes(onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
         blockCounter++
         val req = byteArrayOf(0x03, (blockCounter and 0xFF).toByte(), 0x05, 0x03)
@@ -292,7 +323,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -303,7 +333,6 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
 
     private lateinit var usbManager: UsbManager
-    private var usbReceiver: BroadcastReceiver? = null
     private val ACTION_USB_PERMISSION = "com.vag.kw1281.USB_PERMISSION"
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -334,7 +363,7 @@ class MainActivity : ComponentActivity() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (ACTION_USB_PERMISSION == intent?.action) {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                    // Разрешение получено, устройство готово к работе
+                    // Разрешение получено
                 }
             }
         }, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -378,7 +407,6 @@ fun Kw1281AppScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Карточка статуса
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
@@ -525,9 +553,8 @@ fun Kw1281AppScreen(
     language: 'groovy',
     description: 'Сборочный скрипт модуля с библиотекой usb-serial-for-android и Jetpack Compose',
     content: `plugins {
-    alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
 }
 
 android {
@@ -561,6 +588,9 @@ android {
     buildFeatures {
         compose = true
     }
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.11"
+    }
 }
 
 dependencies {
@@ -579,31 +609,85 @@ dependencies {
 `
   },
   {
+    path: 'settings.gradle.kts',
+    filename: 'settings.gradle.kts',
+    language: 'groovy',
+    description: 'Корневая настройка репозиториев Gradle и JitPack для сборки в GitHub Actions',
+    content: `pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+        maven { url = java.net.URI("https://jitpack.io") }
+    }
+}
+
+rootProject.name = "KW1281Diag"
+include(":app")
+`
+  },
+  {
+    path: 'build.gradle.kts',
+    filename: 'build.gradle.kts (root)',
+    language: 'groovy',
+    description: 'Корневой build.gradle со ссылками на Android Gradle Plugin и Kotlin',
+    content: `plugins {
+    id("com.android.application") version "8.3.2" apply false
+    id("org.jetbrains.kotlin.android") version "1.9.23" apply false
+}
+`
+  },
+  {
+    path: 'gradle/wrapper/gradle-wrapper.properties',
+    filename: 'gradle-wrapper.properties',
+    language: 'properties',
+    description: 'Версия Gradle Wrapper для автоматической загрузки раннером GitHub',
+    content: `distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\\://services.gradle.org/distributions/gradle-8.4-bin.zip
+networkTimeout=10000
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+`
+  },
+  {
     path: 'README.md',
     filename: 'README.md',
     language: 'markdown',
-    description: 'Инструкция по открытию и сборке в Android Studio и подключению к VW Vento',
+    description: 'Пошаговое руководство по автоматической сборке APK через GitHub Actions',
     content: `# VAG KW1281 Android Diagnostic App
 ### Для VW Vento 1995 1.8 ADZ / Mono-Motronic 1.2.3 (3A0 907 311)
 
-## 1. Сборка и запуск в Android Studio
-1. Откройте Android Studio (Hedgehog, Iguana или новее).
-2. Выберите **File -> Open** и укажите папку распакованного проекта.
-3. Дождитесь синхронизации Gradle.
-4. Включите **Отладку по USB** на телефоне (Ulefone Armor 21 / Android 13).
-5. Нажмите **Run 'app'** для установки APK на телефон.
+## 🚀 Как собрать APK на GitHub (в облаке без Android Studio):
+1. **Создайте репозиторий на GitHub**:
+   - Нажмите **New repository** (например, с именем \`kw1281-vento-android\`).
+2. **Загрузите файлы проекта**:
+   - Распакуйте скачанный из этого приложения ZIP-архив.
+   - Загрузите все папки и файлы (включая папку \`.github/\`) в репозиторий через Git или кнопку **Add file -> Upload files**.
+3. **Автоматический запуск сборки**:
+   - Перейдите во вкладку **Actions** в репозитории на GitHub.
+   - Воркфлоу **"Build Android APK (KW1281 Diag)"** запустится автоматически.
+   - Также вы можете в любой момент нажать кнопку **"Run workflow"** вручную.
+4. **Скачивание готового APK**:
+   - Через 1–2 минуты сборка завершится с зелёной отметкой ✅.
+   - Нажмите на название завершённого запуска во вкладке Actions.
+   - В самом низу страницы в блоке **Artifacts** нажмите на **\`kw1281-vento-debug-apk\`**.
+   - Скачается архив с готовым \`app-debug.apk\`, который можно сразу скинуть на телефон (Ulefone Armor 21) и установить!
 
-## 2. Подключение к автомобилю VW Vento 1995 года
-1. **Диагностический разъём**:
-   - На VW Vento 1995 года разъём находится на центральной консоли: снимите заглушку справа от руля или пепельницу/блок управления печкой.
-   - Используется либо 16-контактный OBD-II, либо переходник **VAG 2x2**:
-     - Черный штекер: Питание (+12V и масса GND)
-     - Белый штекер: K-Line и L-Line (для Mono-Motronic нужна K-Line!)
-2. Вставьте адаптер KKL USB FT232 в разъём автомобиля.
-3. Подключите USB-кабель адаптера к телефону через **USB-OTG** переходник (Type-C -> USB-A).
-4. Включите зажигание автомобиля (заводить мотор пока не обязательно).
-5. На телефоне откроется диалоговое окно Android: *"Разрешить приложению KW1281 доступ к USB устройству?"* — нажмите **ОК**.
-6. В приложении нажмите кнопку **Подключить к ЭБУ**.
+## 📱 Подключение к автомобилю VW Vento 1995:
+1. Вставьте адаптер KKL USB FT232 в диагностический разъём автомобиля (OBD-II или переходник 2x2).
+2. Подключите адаптер к телефону через переходник USB-OTG.
+3. Включите зажигание (заводить мотор не обязательно).
+4. Подтвердите доступ к USB в появившемся окне Android.
+5. Нажмите «Подключить к ЭБУ».
 `
   }
 ];
