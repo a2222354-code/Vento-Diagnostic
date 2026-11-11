@@ -303,10 +303,154 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
 `
   },
   {
+    path: 'app/src/main/res/layout/activity_main.xml',
+    filename: 'activity_main.xml',
+    language: 'xml',
+    description: 'Разметка интерфейса с графиком, кнопками управления и журналом обмена KW1281',
+    content: `<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#090D16"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/tvTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="VAG KW1281 DIAGNOSTIC"
+        android:textColor="#38BDF8"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:typeface="monospace" />
+
+    <TextView
+        android:id="@+id/tvSubtitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="VW Vento / Golf 3 (Mono-Motronic 1.2.3, 3A0 907 311)"
+        android:textColor="#94A3B8"
+        android:textSize="12sp"
+        android:layout_marginBottom="16dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#1E293B"
+        android:padding="14dp"
+        android:layout_marginBottom="12dp">
+
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Статус: Ожидание подключения KKL адаптера..."
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvDeviceInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Устройство: Не определено"
+            android:textColor="#38BDF8"
+            android:textSize="12sp"
+            android:layout_marginTop="4dp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="8dp">
+
+        <Button
+            android:id="@+id/btnFindUsb"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:text="Найти USB KKL"
+            android:backgroundTint="#0284C7"
+            android:textColor="#FFFFFF" />
+
+        <Button
+            android:id="@+id/btnConnectEcu"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:text="Подключить ЭБУ"
+            android:backgroundTint="#10B981"
+            android:textColor="#FFFFFF"
+            android:enabled="false" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="16dp">
+
+        <Button
+            android:id="@+id/btnReadFaults"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:text="Ошибки (0x07)"
+            android:backgroundTint="#F59E0B"
+            android:textColor="#FFFFFF"
+            android:enabled="false" />
+
+        <Button
+            android:id="@+id/btnClearFaults"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:text="Стереть (0x05)"
+            android:backgroundTint="#EF4444"
+            android:textColor="#FFFFFF"
+            android:enabled="false" />
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Журнал обмена (KW1281 Log):"
+        android:textColor="#CBD5E1"
+        android:textSize="13sp"
+        android:layout_marginBottom="6dp" />
+
+    <ScrollView
+        android:id="@+id/scrollViewLogs"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#020617"
+        android:padding="8dp">
+
+        <TextView
+            android:id="@+id/tvLogs"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#34D399"
+            android:textSize="11sp"
+            android:typeface="monospace"
+            android:text="Приложение готово к работе." />
+    </ScrollView>
+</LinearLayout>
+`
+  },
+  {
     path: 'app/src/main/java/com/vag/kw1281/MainActivity.kt',
     filename: 'MainActivity.kt',
     language: 'kotlin',
-    description: 'Главный экран Android-приложения с UI на Jetpack Compose',
+    description: 'Главный экран Android-приложения с быстрой и надежной разметкой AppCompat',
     content: `package com.vag.kw1281
 
 import android.app.PendingIntent
@@ -318,37 +462,85 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import android.widget.Button
+import android.widget.ScrollView
+import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
     private lateinit var usbManager: UsbManager
     private val ACTION_USB_PERMISSION = "com.vag.kw1281.USB_PERMISSION"
 
+    private lateinit var tvStatus: TextView
+    private lateinit var tvDeviceInfo: TextView
+    private lateinit var tvLogs: TextView
+    private lateinit var scrollViewLogs: ScrollView
+    private lateinit var btnFindUsb: Button
+    private lateinit var btnConnectEcu: Button
+    private lateinit var btnReadFaults: Button
+    private lateinit var btnClearFaults: Button
+
+    private var foundDevice: UsbDevice? = null
+    private var kwDriver: Ftdi5BaudDriver? = null
+    private var kwProtocol: Kw1281Protocol? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
 
-        setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                Kw1281AppScreen(
-                    usbManager = usbManager,
-                    onRequestPermission = { device -> requestUsbPermission(device) }
-                )
+        tvStatus = findViewById(R.id.tvStatus)
+        tvDeviceInfo = findViewById(R.id.tvDeviceInfo)
+        tvLogs = findViewById(R.id.tvLogs)
+        scrollViewLogs = findViewById(R.id.scrollViewLogs)
+        btnFindUsb = findViewById(R.id.btnFindUsb)
+        btnConnectEcu = findViewById(R.id.btnConnectEcu)
+        btnReadFaults = findViewById(R.id.btnReadFaults)
+        btnClearFaults = findViewById(R.id.btnClearFaults)
+
+        btnFindUsb.setOnClickListener { findUsbAdapter() }
+        btnConnectEcu.setOnClickListener { connectToEcu() }
+        btnReadFaults.setOnClickListener { readFaultCodes() }
+        btnClearFaults.setOnClickListener { clearFaultCodes() }
+
+        addLog("Диагностический комплекс VW Vento 1.8 ADZ (Mono-Motronic 1.2.3)")
+        findUsbAdapter()
+    }
+
+    private fun addLog(msg: String) {
+        lifecycleScope.launch(Dispatchers.Main) {
+            val current = tvLogs.text.toString()
+            val newText = if (current.isEmpty()) msg else "$current\\n$msg"
+            tvLogs.text = newText
+            scrollViewLogs.post {
+                scrollViewLogs.fullScroll(ScrollView.FOCUS_DOWN)
             }
+        }
+    }
+
+    private fun findUsbAdapter() {
+        val deviceList = usbManager.deviceList
+        val ftdi = deviceList.values.firstOrNull { it.vendorId == 0x0403 }
+            ?: deviceList.values.firstOrNull { it.vendorId == 0x1A86 || it.vendorId == 0x10C4 }
+
+        if (ftdi != null) {
+            foundDevice = ftdi
+            tvStatus.text = "Статус: Адаптер обнаружен!"
+            tvDeviceInfo.text = "Устройство: VID 0x%04X, PID 0x%04X".format(ftdi.vendorId, ftdi.productId)
+            btnConnectEcu.isEnabled = true
+            requestUsbPermission(ftdi)
+            addLog("USB KKL адаптер найден: VID=0x%04X, PID=0x%04X".format(ftdi.vendorId, ftdi.productId))
+        } else {
+            tvStatus.text = "Статус: KKL адаптер не найден"
+            tvDeviceInfo.text = "Подключите USB-OTG кабель к телефону"
+            btnConnectEcu.isEnabled = false
+            addLog("Адаптер FT232 / CH340 не обнаружен в системе. Подключите OTG.")
         }
     }
 
@@ -362,132 +554,84 @@ class MainActivity : ComponentActivity() {
             this, 0, Intent(ACTION_USB_PERMISSION), flags
         )
         val filter = IntentFilter(ACTION_USB_PERMISSION)
-        registerReceiver(object : BroadcastReceiver() {
+        val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (ACTION_USB_PERMISSION == intent?.action) {
                     try {
                         unregisterReceiver(this)
                     } catch (e: Exception) {}
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                    // Разрешение получено
+                    if (granted) {
+                        addLog("Разрешение на работу с USB получено!")
+                    } else {
+                        addLog("Предупреждение: Разрешение на USB было отклонено.")
+                    }
                 }
             }
-        }, filter, Context.RECEIVER_EXPORTED)
+        }
+
+        ContextCompat.registerReceiver(
+            this,
+            receiver,
+            filter,
+            ContextCompat.RECEIVER_EXPORTED
+        )
 
         usbManager.requestPermission(device, permissionIntent)
     }
-}
 
-@Composable
-fun Kw1281AppScreen(
-    usbManager: UsbManager,
-    onRequestPermission: (UsbDevice) -> Unit
-) {
-    val coroutineScope = rememberCoroutineScope()
-    var statusText by remember { mutableStateOf("Ожидание подключения KKL адаптера...") }
-    var logs by remember { mutableStateOf(listOf<String>()) }
-    var foundDevice by remember { mutableStateOf<UsbDevice?>(null) }
-    var isConnected by remember { mutableStateOf(false) }
-
-    fun addLog(msg: String) {
-        logs = logs + msg
+    private fun connectToEcu() {
+        val dev = foundDevice ?: return
+        lifecycleScope.launch {
+            btnConnectEcu.isEnabled = false
+            tvStatus.text = "Статус: Открытие порта..."
+            val driver = Ftdi5BaudDriver(usbManager, dev)
+            if (driver.open()) {
+                kwDriver = driver
+                tvStatus.text = "Статус: Инициализация 5 бод..."
+                val protocol = Kw1281Protocol(driver)
+                kwProtocol = protocol
+                val success = protocol.connect { msg -> addLog(msg) }
+                if (success) {
+                    tvStatus.text = "ЭБУ подключен: \${protocol.ecuPartNumber}"
+                    btnReadFaults.isEnabled = true
+                    btnClearFaults.isEnabled = true
+                } else {
+                    tvStatus.text = "Ошибка связи с ЭБУ"
+                    btnConnectEcu.isEnabled = true
+                }
+            } else {
+                tvStatus.text = "Не удалось открыть USB порт"
+                btnConnectEcu.isEnabled = true
+            }
+        }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF090D16))
-            .padding(16.dp)
-    ) {
-        Text(
-            text = "VAG KW1281 DIAGNOSTIC",
-            fontSize = 20.sp,
-            color = Color(0xFF38BDF8),
-            fontFamily = FontFamily.Monospace
-        )
-        Text(
-            text = "VW Vento / Golf 3 (Mono-Motronic 1.2.3, 3A0 907 311)",
-            fontSize = 12.sp,
-            color = Color.Gray
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text("Статус: $statusText", color = Color.White)
-                foundDevice?.let {
-                    Text("Устройство: VID 0x%04X, PID 0x%04X".format(it.vendorId, it.productId), color = Color(0xFF38BDF8))
-                }
+    private fun readFaultCodes() {
+        val protocol = kwProtocol ?: return
+        lifecycleScope.launch {
+            val faults = protocol.readFaultCodes { msg -> addLog(msg) }
+            if (faults.isEmpty()) {
+                addLog("Ошибки в памяти ЭБУ не обнаружены (00000).")
+            } else {
+                addLog("Найдено ошибок: \${faults.size}. Коды: \${faults.joinToString()}")
             }
         }
+    }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = {
-                    val deviceList = usbManager.deviceList
-                    val ftdi = deviceList.values.firstOrNull { it.vendorId == 0x0403 }
-                    if (ftdi != null) {
-                        foundDevice = ftdi
-                        statusText = "Адаптер FT232 обнаружен!"
-                        onRequestPermission(ftdi)
-                        addLog("FTDI FT232R найден: VID=0x0403, PID=0x6001")
-                    } else {
-                        statusText = "FT232 не найден. Подключите OTG кабель."
-                        addLog("Ошибка: USB KKL адаптер не подключен к телефону")
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7))
-            ) {
-                Text("Найти USB KKL")
-            }
-
-            foundDevice?.let { dev ->
-                Button(
-                    onClick = {
-                        coroutineScope.launch {
-                            val driver = Ftdi5BaudDriver(usbManager, dev)
-                            if (driver.open()) {
-                                isConnected = true
-                                statusText = "Инициализация 5 бод..."
-                                val protocol = Kw1281Protocol(driver)
-                                val success = protocol.connect { msg -> addLog(msg) }
-                                if (success) {
-                                    statusText = "ЭБУ подключен: \${protocol.ecuPartNumber}"
-                                }
-                            }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
-                ) {
-                    Text("Подключить к ЭБУ")
-                }
+    private fun clearFaultCodes() {
+        val protocol = kwProtocol ?: return
+        lifecycleScope.launch {
+            val success = protocol.clearFaultCodes { msg -> addLog(msg) }
+            if (success) {
+                addLog("Память ошибок ЭБУ успешно очищена!")
             }
         }
+    }
 
-        Spacer(modifier = Modifier.height(16.dp))
-        Text("Журнал обмена:", color = Color.LightGray, fontSize = 14.sp)
-
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xFF020617))
-                .padding(8.dp)
-        ) {
-            items(logs) { log ->
-                Text(
-                    text = log,
-                    color = Color(0xFF34D399),
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace
-                )
-            }
-        }
+    override fun onDestroy() {
+        super.onDestroy()
+        kwDriver?.close()
     }
 }
 `
@@ -557,7 +701,7 @@ fun Kw1281AppScreen(
     path: 'app/build.gradle.kts',
     filename: 'build.gradle.kts',
     language: 'groovy',
-    description: 'Сборочный скрипт модуля с библиотекой usb-serial-for-android и Jetpack Compose',
+    description: 'Сборочный скрипт модуля с быстрой и надежной библиотекой AndroidX и usb-serial-for-android',
     content: `plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -591,22 +735,14 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-    buildFeatures {
-        compose = true
-    }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.11"
-    }
 }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.2")
-    implementation("androidx.activity:activity-compose:1.9.0")
-    implementation(platform("androidx.compose:compose-bom:2024.06.00"))
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-graphics")
-    implementation("androidx.compose.material3:material3")
     
     // USB Serial драйвер для Android OTG
     implementation("com.github.mik3y:usb-serial-for-android:3.8.0")
