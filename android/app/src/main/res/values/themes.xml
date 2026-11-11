@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Material3.Dark" parent="android:Theme.Material.NoActionBar">
+    <!-- Использование Theme.MaterialComponents.DayNight.NoActionBar обязательно для AppCompatActivity -->
+    <style name="Theme.Material3.Dark" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#38BDF8</item>
+        <item name="colorPrimaryVariant">#0284C7</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#10B981</item>
         <item name="android:statusBarColor">#090D16</item>
         <item name="android:navigationBarColor">#090D16</item>
         <item name="android:windowBackground">#090D16</item>
