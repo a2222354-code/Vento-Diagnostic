@@ -71,7 +71,7 @@ jobs:
     path: 'app/src/main/java/com/vag/kw1281/Ftdi5BaudDriver.kt',
     filename: 'Ftdi5BaudDriver.kt',
     language: 'kotlin',
-    description: 'Высокоточный драйвер K-Line / FTDI FT232 для KW1281 (200.0 мс/бит, подавление эха, DTR/RTS)',
+    description: 'Отказоустойчивый высокоточный драйвер K-Line / FTDI FT232 для KW1281 (200.0 мс/бит)',
     content: `package com.vag.kw1281
 
 import android.hardware.usb.UsbDevice
@@ -84,14 +84,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Высокоточный драйвер K-Line / FTDI FT232 для KW1281.
- * 
- * Особенности:
- * 1. 5 бод = ровно 200.0 мс на бит с защитой от таймингового джиттера Android Linux.
- * 2. Активация DTR/RTS для питания и разрешения трансивера K-Line (L9637D/SI9243).
- * 3. 300 мс пассивного состояния (Mark, Break=false) перед старт-битом.
- * 4. Сброс аппаратного FIFO буфера FTDI после 5-бодовой посылки для очистки мусора от Break.
- * 5. Подавление полудуплексного эха (K-Line Loopback Echo Discard) при отправке байт.
+ * Высокоточный и отказоустойчивый драйвер K-Line / FTDI FT232 для KW1281.
  */
 class Ftdi5BaudDriver(
     private val usbManager: UsbManager,
@@ -106,20 +99,33 @@ class Ftdi5BaudDriver(
 
     suspend fun open(initialBaud: Int = 9600): Boolean = withContext(Dispatchers.IO) {
         try {
+            close()
+
             connection = usbManager.openDevice(device) ?: return@withContext false
-            val driver = UsbSerialProber.getDefaultProber().probeDevice(device) ?: FtdiSerialDriver(device)
+            val proberDriver = try {
+                UsbSerialProber.getDefaultProber().probeDevice(device)
+            } catch (t: Throwable) {
+                null
+            }
+            val driver = proberDriver ?: FtdiSerialDriver(device)
             if (driver.ports.isEmpty()) return@withContext false
-            port = driver.ports[0]
-            port?.open(connection)
+            
+            val p = driver.ports[0]
+            port = p
+            p.open(connection)
 
             try {
-                port?.dtr = true
-                port?.rts = true
-            } catch (e: Exception) {}
+                p.setDTR(true)
+                p.setRTS(true)
+            } catch (t: Throwable) {}
 
-            port?.setParameters(initialBaud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+            try {
+                p.setParameters(initialBaud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+            } catch (t: Throwable) {}
+
             true
-        } catch (e: Exception) {
+        } catch (t: Throwable) {
+            t.printStackTrace()
             false
         }
     }
@@ -134,9 +140,7 @@ class Ftdi5BaudDriver(
             if (remainingMs > 4) {
                 try {
                     Thread.sleep(remainingMs - 2)
-                } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                }
+                } catch (e: InterruptedException) {}
             }
             while (System.nanoTime() < nextTargetNanos) {
                 // Плотный цикл для точности 200.0 мс
@@ -150,19 +154,17 @@ class Ftdi5BaudDriver(
         onLog: (String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext false
-        onLog("Подготовка линии K-Line (300 мс Idle)...")
+        onLog("Подготовка K-Line (300 мс Idle)...")
 
         try {
-            p.setBreak(false)
+            try { p.setBreak(false) } catch (t: Throwable) {}
             Thread.sleep(300)
 
-            p.setBreak(false)
-
-            onLog("Отправка адреса 0x%02X на скорости 5 бод (200.0 мс/бит)...".format(address))
+            onLog("5 бод: посылка адреса 0x%02X (200 мс/бит)...".format(address))
             val waiter = CycleWaiter(BIT_TIME_NANOS)
 
             // 1. Старт-бит: Space (0) -> Break = true
-            p.setBreak(true)
+            try { p.setBreak(true) } catch (t: Throwable) {}
             waiter.waitNext()
 
             // 2. 7 бит данных LSB first
@@ -171,62 +173,79 @@ class Ftdi5BaudDriver(
                 val bit = (address shr i) and 0x01
                 if (bit == 1) {
                     onesCount++
-                    p.setBreak(false) // Mark (1)
+                    try { p.setBreak(false) } catch (t: Throwable) {}
                 } else {
-                    p.setBreak(true) // Space (0)
+                    try { p.setBreak(true) } catch (t: Throwable) {}
                 }
                 waiter.waitNext()
             }
 
             // 3. Бит четности (Odd Parity для KW1281)
             val parityBit = if (onesCount % 2 != 0) 0 else 1
-            p.setBreak(parityBit == 0)
+            try { p.setBreak(parityBit == 0) } catch (t: Throwable) {}
             waiter.waitNext()
 
             // 4. Стоп-бит: Mark (1) -> Break = false
-            p.setBreak(false)
+            try { p.setBreak(false) } catch (t: Throwable) {}
             waiter.waitNext()
 
             // 5. Переключаем UART на рабочую скорость
-            p.setParameters(targetBaud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+            try {
+                p.setParameters(targetBaud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+            } catch (t: Throwable) {}
 
             // 6. Очищаем аппаратный буфер FTDI
             try {
                 p.purgeHwBuffers(true, true)
-            } catch (e: Exception) {}
+            } catch (t: Throwable) {}
 
             val drainBuf = ByteArray(256)
             var drainTries = 0
             while (drainTries < 10) {
-                val readLen = p.read(drainBuf, 10)
+                val readLen = try { p.read(drainBuf, 10) } catch (t: Throwable) { 0 }
                 if (readLen <= 0) break
                 drainTries++
             }
 
-            onLog("5-бодовая посылка завершена. Буфер очищен. Скорость \${targetBaud} бод.")
+            onLog("5-бодовая посылка завершена. Ожидание ответа ЭБУ...")
             true
-        } catch (e: Exception) {
-            onLog("Ошибка при 5-бодовой посылке: \${e.message}")
+        } catch (t: Throwable) {
+            onLog("Ошибка при 5-бодовой посылке: \${t.message ?: t.javaClass.simpleName}")
             false
         }
     }
 
     suspend fun readByte(timeoutMs: Int): Int = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext -1
-        val buf = ByteArray(1)
-        val readLen = p.read(buf, timeoutMs)
-        if (readLen > 0) {
-            buf[0].toInt() and 0xFF
-        } else {
+        try {
+            val buf = ByteArray(1)
+            val readLen = p.read(buf, timeoutMs)
+            if (readLen > 0) {
+                buf[0].toInt() and 0xFF
+            } else {
+                -1
+            }
+        } catch (t: Throwable) {
+            -1
+        }
+    }
+
+    suspend fun readBytes(buffer: ByteArray, timeoutMs: Int): Int = withContext(Dispatchers.IO) {
+        val p = port ?: return@withContext -1
+        try {
+            p.read(buffer, timeoutMs)
+        } catch (t: Throwable) {
             -1
         }
     }
 
     suspend fun writeByteAndDiscardEcho(b: Byte, timeoutMs: Int = 300) = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext
-        p.write(byteArrayOf(b), timeoutMs)
-        val echo = ByteArray(1)
-        p.read(echo, 150)
+        try {
+            p.write(byteArrayOf(b), timeoutMs)
+            val echo = ByteArray(1)
+            p.read(echo, 150)
+        } catch (t: Throwable) {}
     }
 
     suspend fun writeBytesAndDiscardEcho(data: ByteArray, timeoutMs: Int = 500) = withContext(Dispatchers.IO) {
@@ -239,8 +258,12 @@ class Ftdi5BaudDriver(
     fun close() {
         try {
             port?.close()
+        } catch (t: Throwable) {}
+        try {
             connection?.close()
-        } catch (e: Exception) {}
+        } catch (t: Throwable) {}
+        port = null
+        connection = null
     }
 }
 `
@@ -249,7 +272,7 @@ class Ftdi5BaudDriver(
     path: 'app/src/main/java/com/vag/kw1281/Kw1281Protocol.kt',
     filename: 'Kw1281Protocol.kt',
     language: 'kotlin',
-    description: 'Машина состояний протокола KW1281 (Синхронизация 0x55, Keybytes, Title, DTC)',
+    description: 'Машина состояний протокола KW1281 с защитой от сбоев',
     content: `package com.vag.kw1281
 
 import kotlinx.coroutines.Dispatchers
@@ -294,196 +317,231 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     }
 
     suspend fun connect(baudRate: Int = 0, onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
-        val speedsToTry = if (baudRate == 0) listOf(9600, 10400) else listOf(baudRate)
-        for (speed in speedsToTry) {
-            onLog("--- Попытка KW1281 на скорости \${speed} бод ---")
-            if (tryConnectAtBaud(speed, onLog)) {
-                negotiatedBaud = speed
-                return@withContext true
+        try {
+            val speedsToTry = if (baudRate == 0) listOf(9600, 10400) else listOf(baudRate)
+            for (speed in speedsToTry) {
+                onLog("--- Попытка KW1281 на скорости \${speed} бод ---")
+                if (tryConnectAtBaud(speed, onLog)) {
+                    negotiatedBaud = speed
+                    return@withContext true
+                }
+                delay(300)
             }
-            delay(400)
+            onLog("Подключение не удалось. Проверьте зажигание, надёжность K-Line и переключатель скорости.")
+            false
+        } catch (t: Throwable) {
+            onLog("Исключение протокола: \${t.message ?: t.javaClass.simpleName}")
+            false
         }
-        onLog("Подключение не удалось. Проверьте зажигание, надёжность K-Line и переключатель скорости.")
-        false
     }
 
     private suspend fun tryConnectAtBaud(targetBaud: Int, onLog: (String) -> Unit): Boolean {
-        blockCounter = 0
-        ecuPartNumber = ""
-        ecuComponent = ""
-        ecuExtra = ""
+        try {
+            blockCounter = 0
+            ecuPartNumber = ""
+            ecuComponent = ""
+            ecuExtra = ""
 
-        val sent = driver.send5BaudInitAddress(0x01, targetBaud, onLog)
-        if (!sent) return false
+            val sent = driver.send5BaudInitAddress(0x01, targetBaud, onLog)
+            if (!sent) return false
 
-        onLog("Ожидание синхробайта 0x55 (таймаут 3.5 с)...")
-        val syncStart = System.currentTimeMillis()
-        var syncFound = false
-        val receivedHex = mutableListOf<String>()
+            onLog("Ожидание синхробайта 0x55 (таймаут 3.5 с)...")
+            val syncStart = System.currentTimeMillis()
+            var syncFound = false
+            val receivedHex = mutableListOf<String>()
 
-        while (System.currentTimeMillis() - syncStart < 3500) {
-            val b = driver.readByte(300)
-            if (b >= 0) {
-                val hexStr = "0x%02X".format(b)
-                receivedHex.add(hexStr)
-                if (b == 0x55) {
-                    syncFound = true
-                    break
+            while (System.currentTimeMillis() - syncStart < 3500) {
+                val b = driver.readByte(250)
+                if (b >= 0) {
+                    val hexStr = "0x%02X".format(b)
+                    receivedHex.add(hexStr)
+                    if (b == 0x55) {
+                        syncFound = true
+                        break
+                    }
                 }
             }
-        }
 
-        if (!syncFound) {
-            val rxDetails = if (receivedHex.isEmpty()) "RX молчит" else "RX байты: \${receivedHex.joinToString(\" \")}"
-            onLog("Синхробайт 0x55 не обнаружен (\${rxDetails}).")
+            if (!syncFound) {
+                val rxDetails = if (receivedHex.isEmpty()) "линия молчит" else "получено: \${receivedHex.joinToString(\" \")}"
+                onLog("Синхробайт 0x55 не обнаружен (\${rxDetails}).")
+                return false
+            }
+
+            onLog("Получен Sync Byte: 0x55! Скорость \${targetBaud} бод подтверждена.")
+
+            val kb1 = driver.readByte(1500)
+            if (kb1 < 0) {
+                onLog("Ошибка: таймаут чтения KeyByte 1")
+                return false
+            }
+            val kb2 = driver.readByte(1500)
+            if (kb2 < 0) {
+                onLog("Ошибка: таймаут чтения KeyByte 2")
+                return false
+            }
+
+            val proto = ((kb2 and 0x7F) shl 7) + (kb1 and 0x7F)
+            onLog("KeyBytes: 0x%02X 0x%02X -> Протокол KW%d".format(kb1, kb2, proto))
+
+            val complement = ((kb2 xor 0xFF) and 0xFF).toByte()
+            delay(35)
+            driver.writeByteAndDiscardEcho(complement, 500)
+            onLog("Отправлен комплемент ~KB2: 0x%02X".format(complement.toInt() and 0xFF))
+
+            return readTitleBlocks(onLog)
+        } catch (t: Throwable) {
+            onLog("Ошибка сессии: \${t.message ?: t.javaClass.simpleName}")
             return false
         }
-
-        onLog("Получен Sync Byte: 0x55! Скорость \${targetBaud} бод подтверждена.")
-
-        val kb1 = driver.readByte(1500)
-        if (kb1 < 0) {
-            onLog("Ошибка: таймаут чтения KeyByte 1")
-            return false
-        }
-        val kb2 = driver.readByte(1500)
-        if (kb2 < 0) {
-            onLog("Ошибка: таймаут чтения KeyByte 2")
-            return false
-        }
-
-        val proto = ((kb2 and 0x7F) shl 7) + (kb1 and 0x7F)
-        onLog("KeyBytes: 0x%02X 0x%02X -> Протокол KW%d".format(kb1, kb2, proto))
-
-        val complement = ((kb2 xor 0xFF) and 0xFF).toByte()
-        delay(35)
-        driver.writeByteAndDiscardEcho(complement, 500)
-        onLog("Отправлен комплемент ~KB2: 0x%02X".format(complement.toInt() and 0xFF))
-
-        return readTitleBlocks(onLog)
     }
 
     private suspend fun readAndAckByte(timeoutMs: Int = 1500): Int {
-        val b = driver.readByte(timeoutMs)
-        if (b < 0) return -1
-        delay(3)
-        val comp = ((b xor 0xFF) and 0xFF).toByte()
-        driver.writeByteAndDiscardEcho(comp, 500)
-        return b
+        try {
+            val b = driver.readByte(timeoutMs)
+            if (b < 0) return -1
+            delay(3)
+            val comp = ((b xor 0xFF) and 0xFF).toByte()
+            driver.writeByteAndDiscardEcho(comp, 500)
+            return b
+        } catch (t: Throwable) {
+            return -1
+        }
     }
 
     private suspend fun receiveBlock(timeoutMs: Int = 2000): KwBlock? {
-        val length = readAndAckByte(timeoutMs)
-        if (length < 3) return null
+        try {
+            val length = readAndAckByte(timeoutMs)
+            if (length < 3) return null
 
-        val counter = readAndAckByte(1000)
-        if (counter < 0) return null
+            val counter = readAndAckByte(1000)
+            if (counter < 0) return null
 
-        val title = readAndAckByte(1000)
-        if (title < 0) return null
+            val title = readAndAckByte(1000)
+            if (title < 0) return null
 
-        val dataLen = length - 3
-        val data = ByteArray(dataLen)
-        for (i in 0 until dataLen) {
-            val db = readAndAckByte(1000)
-            if (db < 0) return null
-            data[i] = db.toByte()
+            val dataLen = length - 3
+            val data = ByteArray(dataLen)
+            for (i in 0 until dataLen) {
+                val db = readAndAckByte(1000)
+                if (db < 0) return null
+                data[i] = db.toByte()
+            }
+
+            driver.readByte(1000)
+            return KwBlock(length, counter, title, data)
+        } catch (t: Throwable) {
+            return null
         }
-
-        val endByte = driver.readByte(1000)
-        return KwBlock(length, counter, title, data)
     }
 
     private suspend fun sendBlock(title: Int, payload: ByteArray = ByteArray(0)): Boolean {
-        blockCounter++
-        val length = 3 + payload.size
-        val packet = mutableListOf<Byte>()
-        packet.add(length.toByte())
-        packet.add((blockCounter and 0xFF).toByte())
-        packet.add(title.toByte())
-        for (b in payload) {
-            packet.add(b)
-        }
-        packet.add(0x03.toByte())
+        try {
+            blockCounter++
+            val length = 3 + payload.size
+            val packet = mutableListOf<Byte>()
+            packet.add(length.toByte())
+            packet.add((blockCounter and 0xFF).toByte())
+            packet.add(title.toByte())
+            for (b in payload) {
+                packet.add(b)
+            }
+            packet.add(0x03.toByte())
 
-        for (i in 0 until packet.size - 1) {
-            val b = packet[i]
-            driver.writeByteAndDiscardEcho(b, 500)
-            val comp = driver.readByte(1000)
+            for (i in 0 until packet.size - 1) {
+                val b = packet[i]
+                driver.writeByteAndDiscardEcho(b, 500)
+                driver.readByte(1000)
+            }
+            driver.writeByteAndDiscardEcho(0x03.toByte(), 500)
+            return true
+        } catch (t: Throwable) {
+            return false
         }
-        driver.writeByteAndDiscardEcho(0x03.toByte(), 500)
-        return true
     }
 
     private suspend fun readTitleBlocks(onLog: (String) -> Unit): Boolean {
-        var titleCount = 0
-        while (titleCount < 4) {
-            val block = receiveBlock(2000) ?: break
-            titleCount++
-            blockCounter = block.counter
+        try {
+            var titleCount = 0
+            while (titleCount < 4) {
+                val block = receiveBlock(2000) ?: break
+                titleCount++
+                blockCounter = block.counter
 
-            if (block.title == 0xF6) {
-                val text = String(block.data, Charsets.US_ASCII).trim()
-                when (titleCount) {
-                    1 -> { ecuPartNumber = text; onLog("ЭБУ Номер: \${text}") }
-                    2 -> { ecuComponent = text; onLog("ЭБУ Компонент: \${text}") }
-                    3 -> { ecuExtra = text; onLog("ЭБУ Кодировка: \${text}") }
-                    else -> onLog("ЭБУ Инфо: \${text}")
+                if (block.title == 0xF6) {
+                    val text = String(block.data, Charsets.US_ASCII).trim()
+                    when (titleCount) {
+                        1 -> { ecuPartNumber = text; onLog("ЭБУ Номер: \${text}") }
+                        2 -> { ecuComponent = text; onLog("ЭБУ Компонент: \${text}") }
+                        3 -> { ecuExtra = text; onLog("ЭБУ Кодировка: \${text}") }
+                        else -> onLog("ЭБУ Инфо: \${text}")
+                    }
+                    sendBlock(0x09)
+                } else if (block.title == 0x09) {
+                    onLog("Идентификация завершена. ЭБУ готов к командам!")
+                    return true
                 }
-                sendBlock(0x09)
-            } else if (block.title == 0x09) {
-                onLog("Идентификация завершена. ЭБУ готов к командам!")
-                return true
             }
+            return ecuPartNumber.isNotEmpty()
+        } catch (t: Throwable) {
+            onLog("Ошибка чтения инфо: \${t.message ?: t.javaClass.simpleName}")
+            return false
         }
-        return ecuPartNumber.isNotEmpty()
     }
 
     suspend fun readFaultCodes(onLog: (String) -> Unit): List<Pair<String, String>> = withContext(Dispatchers.IO) {
         val faults = mutableListOf<Pair<String, String>>()
-        onLog("Запрос памяти ошибок (Команда 0x07)...")
+        try {
+            onLog("Запрос памяти ошибок (Команда 0x07)...")
+            sendBlock(0x07)
 
-        sendBlock(0x07)
+            while (true) {
+                val block = receiveBlock(2000) ?: break
+                blockCounter = block.counter
 
-        while (true) {
-            val block = receiveBlock(2000) ?: break
-            blockCounter = block.counter
-
-            if (block.title == 0xFC) {
-                var idx = 0
-                while (idx + 1 < block.data.size) {
-                    val high = block.data[idx].toInt() and 0xFF
-                    val low = block.data[idx + 1].toInt() and 0xFF
-                    val code = (high shl 8) or low
-                    if (code != 0) {
-                        val dtc = "%05d".format(code)
-                        val desc = KNOWN_DTC_DESCRIPTIONS[dtc] ?: "Код неисправности VAG \${dtc}"
-                        faults.add(Pair(dtc, desc))
-                        onLog("Ошибка \${dtc}: \${desc}")
+                if (block.title == 0xFC) {
+                    var idx = 0
+                    while (idx + 1 < block.data.size) {
+                        val high = block.data[idx].toInt() and 0xFF
+                        val low = block.data[idx + 1].toInt() and 0xFF
+                        val code = (high shl 8) or low
+                        if (code != 0) {
+                            val dtc = "%05d".format(code)
+                            val desc = KNOWN_DTC_DESCRIPTIONS[dtc] ?: "Код неисправности VAG \${dtc}"
+                            faults.add(Pair(dtc, desc))
+                            onLog("Ошибка \${dtc}: \${desc}")
+                        }
+                        idx += 2
                     }
-                    idx += 2
+                    sendBlock(0x09)
+                } else {
+                    sendBlock(0x09)
+                    break
                 }
-                sendBlock(0x09)
-            } else {
-                sendBlock(0x09)
-                break
             }
+        } catch (t: Throwable) {
+            onLog("Ошибка чтения DTC: \${t.message ?: t.javaClass.simpleName}")
         }
         faults
     }
 
     suspend fun clearFaultCodes(onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
-        onLog("Отправка команды стирания ошибок (Команда 0x05)...")
-        sendBlock(0x05)
-        val block = receiveBlock(2500)
-        if (block != null) {
-            blockCounter = block.counter
-            sendBlock(0x09)
-            onLog("Ошибки успешно удалены из памяти ЭБУ!")
-            true
-        } else {
-            onLog("Команда 0x05 отправлена.")
-            true
+        try {
+            onLog("Отправка команды стирания ошибок (Команда 0x05)...")
+            sendBlock(0x05)
+            val block = receiveBlock(2500)
+            if (block != null) {
+                blockCounter = block.counter
+                sendBlock(0x09)
+                onLog("Ошибки успешно удалены из памяти ЭБУ!")
+                true
+            } else {
+                onLog("Команда 0x05 отправлена.")
+                true
+            }
+        } catch (t: Throwable) {
+            onLog("Ошибка стирания: \${t.message ?: t.javaClass.simpleName}")
+            false
         }
     }
 }
@@ -744,7 +802,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     path: 'app/src/main/java/com/vag/kw1281/MainActivity.kt',
     filename: 'MainActivity.kt',
     language: 'kotlin',
-    description: 'Главный экран Android-приложения с выбором скорости и детальной диагностикой',
+    description: 'Главный экран Android-приложения с защитой от сбоев и выбором скорости',
     content: `package com.vag.kw1281
 
 import android.app.PendingIntent
@@ -752,6 +810,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
@@ -823,6 +882,12 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         try {
+            val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                addLog("Непредвиденная ошибка: \${throwable.message ?: throwable.javaClass.simpleName}")
+                defaultHandler?.uncaughtException(thread, throwable)
+            }
+
             setContentView(R.layout.activity_main)
 
             usbManager = getSystemService(Context.USB_SERVICE) as? UsbManager
@@ -871,43 +936,45 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupBaudButtons() {
         fun updateStyles() {
-            val activeColor = Color.parseColor("#38BDF8")
-            val activeText = Color.parseColor("#090D16")
-            val inactiveColor = Color.parseColor("#334155")
-            val inactiveText = Color.parseColor("#CBD5E1")
+            try {
+                val activeColor = Color.parseColor("#38BDF8")
+                val activeText = Color.parseColor("#090D16")
+                val inactiveColor = Color.parseColor("#334155")
+                val inactiveText = Color.parseColor("#CBD5E1")
 
-            btnBaudAuto.setBackgroundColor(if (selectedBaud == 0) activeColor else inactiveColor)
-            btnBaudAuto.setTextColor(if (selectedBaud == 0) activeText else inactiveText)
+                btnBaudAuto.backgroundTintList = ColorStateList.valueOf(if (selectedBaud == 0) activeColor else inactiveColor)
+                btnBaudAuto.setTextColor(if (selectedBaud == 0) activeText else inactiveText)
 
-            btnBaud9600.setBackgroundColor(if (selectedBaud == 9600) activeColor else inactiveColor)
-            btnBaud9600.setTextColor(if (selectedBaud == 9600) activeText else inactiveText)
+                btnBaud9600.backgroundTintList = ColorStateList.valueOf(if (selectedBaud == 9600) activeColor else inactiveColor)
+                btnBaud9600.setTextColor(if (selectedBaud == 9600) activeText else inactiveText)
 
-            btnBaud10400.setBackgroundColor(if (selectedBaud == 10400) activeColor else inactiveColor)
-            btnBaud10400.setTextColor(if (selectedBaud == 10400) activeText else inactiveText)
+                btnBaud10400.backgroundTintList = ColorStateList.valueOf(if (selectedBaud == 10400) activeColor else inactiveColor)
+                btnBaud10400.setTextColor(if (selectedBaud == 10400) activeText else inactiveText)
 
-            btnBaud4800.setBackgroundColor(if (selectedBaud == 4800) activeColor else inactiveColor)
-            btnBaud4800.setTextColor(if (selectedBaud == 4800) activeText else inactiveText)
+                btnBaud4800.backgroundTintList = ColorStateList.valueOf(if (selectedBaud == 4800) activeColor else inactiveColor)
+                btnBaud4800.setTextColor(if (selectedBaud == 4800) activeText else inactiveText)
+            } catch (t: Throwable) {}
         }
 
         btnBaudAuto.setOnClickListener {
             selectedBaud = 0
             updateStyles()
-            addLog("Выбран режим: Авто (поиск 9600 / 10400 бод)")
+            addLog("Режим скорости: Авто (поиск 9600 / 10400 бод)")
         }
         btnBaud9600.setOnClickListener {
             selectedBaud = 9600
             updateStyles()
-            addLog("Выбрана фиксированная скорость: 9600 бод")
+            addLog("Режим скорости: 9600 бод")
         }
         btnBaud10400.setOnClickListener {
             selectedBaud = 10400
             updateStyles()
-            addLog("Выбрана фиксированная скорость: 10400 бод")
+            addLog("Режим скорости: 10400 бод")
         }
         btnBaud4800.setOnClickListener {
             selectedBaud = 4800
             updateStyles()
-            addLog("Выбрана фиксированная скорость: 4800 бод")
+            addLog("Режим скорости: 4800 бод")
         }
     }
 
@@ -977,30 +1044,49 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun connectToEcu() {
-        val dev = foundDevice ?: return
-        val manager = usbManager ?: return
+        val dev = foundDevice ?: run {
+            addLog("Сначала подключите USB KKL адаптер.")
+            return
+        }
+        val manager = usbManager ?: run {
+            addLog("USB сервис недоступен на данном устройстве.")
+            return
+        }
         lifecycleScope.launch {
-            btnConnectEcu.isEnabled = false
-            tvStatus.text = "Статус: Открытие порта..."
-            val initialBaud = if (selectedBaud == 0) 9600 else selectedBaud
-            val driver = Ftdi5BaudDriver(manager, dev)
-            if (driver.open(initialBaud)) {
-                kwDriver = driver
-                tvStatus.text = "Статус: Инициализация 5 бод..."
-                val protocol = Kw1281Protocol(driver)
-                kwProtocol = protocol
-                val success = protocol.connect(selectedBaud) { msg -> addLog(msg) }
-                if (success) {
-                    val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else "3A0 907 311"
-                    tvStatus.text = "ЭБУ подключен: \${pNum} (\${protocol.negotiatedBaud} бод)"
-                    btnReadFaults.isEnabled = true
-                    btnClearFaults.isEnabled = true
+            try {
+                btnConnectEcu.isEnabled = false
+                tvStatus.text = "Статус: Открытие порта..."
+                
+                try {
+                    kwDriver?.close()
+                } catch (t: Throwable) {}
+
+                val initialBaud = if (selectedBaud == 0) 9600 else selectedBaud
+                val driver = Ftdi5BaudDriver(manager, dev)
+                if (driver.open(initialBaud)) {
+                    kwDriver = driver
+                    tvStatus.text = "Статус: Инициализация 5 бод..."
+                    val protocol = Kw1281Protocol(driver)
+                    kwProtocol = protocol
+                    val success = protocol.connect(selectedBaud) { msg -> addLog(msg) }
+                    if (success) {
+                        val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else "3A0 907 311"
+                        tvStatus.text = "ЭБУ подключен: \${pNum} (\${protocol.negotiatedBaud} бод)"
+                        btnReadFaults.isEnabled = true
+                        btnClearFaults.isEnabled = true
+                    } else {
+                        tvStatus.text = "Ошибка связи с ЭБУ"
+                        btnConnectEcu.isEnabled = true
+                    }
                 } else {
-                    tvStatus.text = "Ошибка связи с ЭБУ"
+                    tvStatus.text = "Не удалось открыть USB порт"
+                    addLog("Ошибка: Не удалось открыть порт USB адаптера.")
                     btnConnectEcu.isEnabled = true
                 }
-            } else {
-                tvStatus.text = "Не удалось открыть USB порт"
+            } catch (t: Throwable) {
+                t.printStackTrace()
+                addLog("Сбой при подключении: \${t.message ?: t.javaClass.simpleName}")
+                tvStatus.text = "Ошибка подключения"
                 btnConnectEcu.isEnabled = true
             }
         }
@@ -1009,16 +1095,21 @@ class MainActivity : AppCompatActivity() {
     private fun readFaultCodes() {
         val protocol = kwProtocol ?: return
         lifecycleScope.launch {
-            btnReadFaults.isEnabled = false
-            val faults = protocol.readFaultCodes { msg -> addLog(msg) }
-            btnReadFaults.isEnabled = true
-            if (faults.isEmpty()) {
-                addLog("В памяти ЭБУ ошибок нет (DTC 00000). Все системы в норме!")
-            } else {
-                addLog("Всего ошибок: \${faults.size}")
-                for ((dtc, desc) in faults) {
-                    addLog("• \${dtc} — \${desc}")
+            try {
+                btnReadFaults.isEnabled = false
+                val faults = protocol.readFaultCodes { msg -> addLog(msg) }
+                btnReadFaults.isEnabled = true
+                if (faults.isEmpty()) {
+                    addLog("В памяти ЭБУ ошибок нет (DTC 00000). Все системы в норме!")
+                } else {
+                    addLog("Всего ошибок: \${faults.size}")
+                    for ((dtc, desc) in faults) {
+                        addLog("• \${dtc} — \${desc}")
+                    }
                 }
+            } catch (t: Throwable) {
+                btnReadFaults.isEnabled = true
+                addLog("Ошибка чтения DTC: \${t.message ?: t.javaClass.simpleName}")
             }
         }
     }
@@ -1026,11 +1117,16 @@ class MainActivity : AppCompatActivity() {
     private fun clearFaultCodes() {
         val protocol = kwProtocol ?: return
         lifecycleScope.launch {
-            btnClearFaults.isEnabled = false
-            val success = protocol.clearFaultCodes { msg -> addLog(msg) }
-            btnClearFaults.isEnabled = true
-            if (success) {
-                addLog("Память ошибок очищена! Повторите чтение для проверки.")
+            try {
+                btnClearFaults.isEnabled = false
+                val success = protocol.clearFaultCodes { msg -> addLog(msg) }
+                btnClearFaults.isEnabled = true
+                if (success) {
+                    addLog("Память ошибок очищена! Повторите чтение для проверки.")
+                }
+            } catch (t: Throwable) {
+                btnClearFaults.isEnabled = true
+                addLog("Ошибка стирания DTC: \${t.message ?: t.javaClass.simpleName}")
             }
         }
     }
