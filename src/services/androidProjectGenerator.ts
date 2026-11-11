@@ -51,18 +51,33 @@ jobs:
         working-directory: android
         run: |
           export PATH="$GITHUB_WORKSPACE/gradle-8.4/bin:$PATH"
+          export ANDROID_HOME="/usr/local/lib/android/sdk"
+          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
           mkdir -p "$ANDROID_HOME/licenses" || true
           echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-license" || true
           echo "d56f5187479edd34eabfb83902802b63065e7a56" >> "$ANDROID_HOME/licenses/android-sdk-license" || true
           echo "84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-preview-license" || true
-          gradle assembleDebug --stacktrace --no-daemon
+          gradle assembleDebug --stacktrace --no-daemon 2>&1 | tee ../build.log
 
       - name: 5. Выгрузка готового APK в артефакты
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: kw1281-vento-debug-apk
           path: "**/app/build/outputs/apk/debug/app-debug.apk"
           retention-days: 14
+
+      - name: 6. Диагностика в случае ошибки
+        if: failure()
+        run: |
+          echo "### ❌ Ошибка сборки Gradle" >> $GITHUB_STEP_SUMMARY
+          echo '\`\`\`text' >> $GITHUB_STEP_SUMMARY
+          if [ -f ../build.log ]; then
+            tail -n 120 ../build.log >> $GITHUB_STEP_SUMMARY
+          elif [ -f build.log ]; then
+            tail -n 120 build.log >> $GITHUB_STEP_SUMMARY
+          fi
+          echo '\`\`\`' >> $GITHUB_STEP_SUMMARY
 `
   },
   {
@@ -177,7 +192,7 @@ class Ftdi5BaudDriver(
         try {
             port?.close()
             connection?.close()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {}
     }
 }
 `
@@ -363,11 +378,14 @@ class MainActivity : ComponentActivity() {
         registerReceiver(object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (ACTION_USB_PERMISSION == intent?.action) {
+                    try {
+                        unregisterReceiver(this)
+                    } catch (e: Exception) {}
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     // Разрешение получено
                 }
             }
-        }, filter, Context.RECEIVER_NOT_EXPORTED)
+        }, filter, Context.RECEIVER_EXPORTED)
 
         usbManager.requestPermission(device, permissionIntent)
     }
@@ -657,6 +675,17 @@ networkTimeout=10000
 validateDistributionUrl=true
 zipStoreBase=GRADLE_USER_HOME
 zipStorePath=wrapper/dists
+`
+  },
+  {
+    path: 'gradle.properties',
+    filename: 'gradle.properties',
+    language: 'properties',
+    description: 'Настройки памяти JVM и поддержка AndroidX для компилятора',
+    content: `org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+android.nonTransitiveRClass=true
+kotlin.daemon.jvmargs=-Xmx2048m
 `
   },
   {

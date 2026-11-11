@@ -32,7 +32,8 @@ jobs:
         working-directory: android
         run: |
           export PATH="$GITHUB_WORKSPACE/gradle-8.4/bin:$PATH"
-          gradle --version
+          export ANDROID_HOME="/usr/local/lib/android/sdk"
+          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
           
           # Pre-accept Android SDK licenses
           mkdir -p "$ANDROID_HOME/licenses" || true
@@ -41,7 +42,7 @@ jobs:
           echo "84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-preview-license" || true
           
           echo "Compiling Debug APK..."
-          gradle assembleDebug --stacktrace --no-daemon
+          gradle assembleDebug --stacktrace --no-daemon 2>&1 | tee ../build.log
 
       - name: 5. Upload Debug APK Artifact
         if: success()
@@ -51,12 +52,25 @@ jobs:
           path: "**/app/build/outputs/apk/debug/app-debug.apk"
           retention-days: 14
 
-      - name: 6. Upload Build Logs on Failure
+      - name: 6. Diagnostic Summary on Failure
         if: failure()
+        run: |
+          echo "### ❌ Ошибка сборки Gradle" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          if [ -f ../build.log ]; then
+            tail -n 120 ../build.log >> $GITHUB_STEP_SUMMARY
+          elif [ -f build.log ]; then
+            tail -n 120 build.log >> $GITHUB_STEP_SUMMARY
+          fi
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: 7. Upload Build Logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-failure-log
+          name: build-logs
           path: |
-            android/app/build/reports/
-            **/build/reports/
+            build.log
+            ../build.log
+          if-no-files-found: ignore
           retention-days: 7

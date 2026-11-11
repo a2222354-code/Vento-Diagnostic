@@ -92,6 +92,6 @@ class Ftdi5BaudDriver(
         try {
             port?.close()
             connection?.close()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {}
     }
 }

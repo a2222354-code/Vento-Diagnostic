@@ -53,10 +53,12 @@ class MainActivity : ComponentActivity() {
         val permissionIntent = PendingIntent.getBroadcast(
             this, 0, Intent(ACTION_USB_PERMISSION), flags
         )
-        val filter = IntentFilter(ACTION_USB_PERMISSION)
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (ACTION_USB_PERMISSION == intent?.action) {
+                    try {
+                        unregisterReceiver(this)
+                    } catch (e: Exception) {}
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     // USB permission granted
                 }
@@ -67,7 +69,7 @@ class MainActivity : ComponentActivity() {
             this,
             receiver,
             filter,
-            ContextCompat.RECEIVER_NOT_EXPORTED
+            ContextCompat.RECEIVER_EXPORTED
         )
 
         usbManager.requestPermission(device, permissionIntent)
