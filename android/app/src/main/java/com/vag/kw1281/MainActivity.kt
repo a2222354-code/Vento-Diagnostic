@@ -99,7 +99,7 @@ class MainActivity : AppCompatActivity() {
             }
             isReceiverRegistered = true
 
-            addLog("Диагностический комплекс VW Vento 1.8 ADZ (Mono-Motronic 1.2.3)")
+            addLog("Vento Diagnostic — VW Vento 1995 1.8 ADZ (Mono-Motronic 1.2.3)")
             findUsbAdapter()
         } catch (e: Exception) {
             e.printStackTrace()

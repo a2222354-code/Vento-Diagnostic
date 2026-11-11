@@ -315,24 +315,45 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     android:background="#090D16"
     android:padding="16dp">
 
-    <TextView
-        android:id="@+id/tvTitle"
-        android:layout_width="wrap_content"
+    <!-- Header with Red VW Vento Icon -->
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="VAG KW1281 DIAGNOSTIC"
-        android:textColor="#38BDF8"
-        android:textSize="20sp"
-        android:textStyle="bold"
-        android:typeface="monospace" />
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="16dp">
 
-    <TextView
-        android:id="@+id/tvSubtitle"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="VW Vento / Golf 3 (Mono-Motronic 1.2.3, 3A0 907 311)"
-        android:textColor="#94A3B8"
-        android:textSize="12sp"
-        android:layout_marginBottom="16dp" />
+        <ImageView
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_launcher"
+            android:layout_marginEnd="12dp"
+            android:contentDescription="VW Vento" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="VENTO DIAGNOSTIC"
+                android:textColor="#38BDF8"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:typeface="monospace" />
+
+            <TextView
+                android:id="@+id/tvSubtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="VW Vento 1995 1.8 ADZ (Mono-Motronic 1.2.3)"
+                android:textColor="#94A3B8"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -720,8 +741,8 @@ class MainActivity : AppCompatActivity() {
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="KW1281 Diag"
-        android:roundIcon="@mipmap/ic_launcher_round"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="Vento Diagnostic"
         android:supportsRtl="true"
         android:theme="@style/Theme.Material3.Dark">
 
@@ -883,6 +904,17 @@ kotlin.daemon.jvmargs=-Xmx2048m
 `
   },
   {
+    path: 'app/src/main/res/values/strings.xml',
+    filename: 'strings.xml',
+    language: 'xml',
+    description: 'Название приложения Vento Diagnostic',
+    content: `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Vento Diagnostic</string>
+</resources>
+`
+  },
+  {
     path: 'README.md',
     filename: 'README.md',
     language: 'markdown',
@@ -922,6 +954,21 @@ export async function createAndroidProjectZip(): Promise<Blob> {
   ANDROID_PROJECT_FILES.forEach((file) => {
     zip.file(file.path, file.content);
   });
+
+  try {
+    const iconRes = await fetch('/vento_icon.png');
+    if (iconRes.ok) {
+      const iconBlob = await iconRes.blob();
+      zip.file('app/src/main/res/drawable/ic_launcher.png', iconBlob);
+      zip.file('app/src/main/res/mipmap-mdpi/ic_launcher.png', iconBlob);
+      zip.file('app/src/main/res/mipmap-hdpi/ic_launcher.png', iconBlob);
+      zip.file('app/src/main/res/mipmap-xhdpi/ic_launcher.png', iconBlob);
+      zip.file('app/src/main/res/mipmap-xxhdpi/ic_launcher.png', iconBlob);
+      zip.file('app/src/main/res/mipmap-xxxhdpi/ic_launcher.png', iconBlob);
+    }
+  } catch (err) {
+    console.warn('Could not bundle icon into ZIP', err);
+  }
 
   return await zip.generateAsync({ type: 'blob' });
 }

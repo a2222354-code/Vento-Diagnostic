@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "VAG KW1281 Android Diag",
-  "short_name": "KW1281 Diag",
+  "name": "Vento Diagnostic",
+  "short_name": "Vento Diag",
   "description": "Диагностика VW Vento 1.8 Mono-Motronic 1.2.3 (3A0 907 311) через FT232 KKL",
   "start_url": "/",
   "scope": "/",

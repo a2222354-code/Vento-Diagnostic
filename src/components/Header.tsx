@@ -108,20 +108,22 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Brand & Vehicle Context */}
           <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-start">
             <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-lg bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400 font-bold">
-                <Activity className="w-5 h-5" />
-              </div>
+              <img
+                src="/vento_icon.png"
+                alt="VW Vento"
+                className="w-10 h-10 rounded-lg border border-slate-700/80 object-cover shadow-sm bg-slate-950"
+              />
               <div>
                 <div className="flex items-center gap-2">
                   <h1 className="text-sm sm:text-base font-bold text-slate-100 tracking-tight">
-                    VAG KW1281 Diag
+                    Vento Diagnostic
                   </h1>
                   <span className="text-xs text-blue-400 font-mono font-medium">
                     v1.2.3
                   </span>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-slate-400">
-                  <span>VW Vento 1995</span>
+                  <span>VW Vento 1995 1.8 ADZ</span>
                   <span aria-hidden="true">·</span>
                   <span className="font-mono">{ecuPartNumber}</span>
                 </div>

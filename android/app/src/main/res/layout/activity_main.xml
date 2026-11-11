@@ -6,25 +6,45 @@
     android:background="#090D16"
     android:padding="16dp">
 
-    <!-- Header -->
-    <TextView
-        android:id="@+id/tvTitle"
-        android:layout_width="wrap_content"
+    <!-- Header with Red VW Vento Icon -->
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="VAG KW1281 DIAGNOSTIC"
-        android:textColor="#38BDF8"
-        android:textSize="20sp"
-        android:textStyle="bold"
-        android:typeface="monospace" />
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="16dp">
 
-    <TextView
-        android:id="@+id/tvSubtitle"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="VW Vento / Golf 3 (Mono-Motronic 1.2.3, 3A0 907 311)"
-        android:textColor="#94A3B8"
-        android:textSize="12sp"
-        android:layout_marginBottom="16dp" />
+        <ImageView
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_launcher"
+            android:layout_marginEnd="12dp"
+            android:contentDescription="VW Vento" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="VENTO DIAGNOSTIC"
+                android:textColor="#38BDF8"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:typeface="monospace" />
+
+            <TextView
+                android:id="@+id/tvSubtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="VW Vento 1995 1.8 ADZ (Mono-Motronic 1.2.3)"
+                android:textColor="#94A3B8"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
 
     <!-- Status Card -->
     <LinearLayout
