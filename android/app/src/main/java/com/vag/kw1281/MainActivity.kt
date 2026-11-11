@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Color
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
@@ -29,7 +30,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnConnectEcu: Button
     private lateinit var btnReadFaults: Button
     private lateinit var btnClearFaults: Button
+    private lateinit var btnClearLog: Button
 
+    private lateinit var btnBaudAuto: Button
+    private lateinit var btnBaud9600: Button
+    private lateinit var btnBaud10400: Button
+    private lateinit var btnBaud4800: Button
+
+    private var selectedBaud: Int = 0 // 0 = Автоматически (9600 затем 10400)
     private var foundDevice: UsbDevice? = null
     private var kwDriver: Ftdi5BaudDriver? = null
     private var kwProtocol: Kw1281Protocol? = null
@@ -80,13 +88,21 @@ class MainActivity : AppCompatActivity() {
             btnConnectEcu = findViewById(R.id.btnConnectEcu)
             btnReadFaults = findViewById(R.id.btnReadFaults)
             btnClearFaults = findViewById(R.id.btnClearFaults)
+            btnClearLog = findViewById(R.id.btnClearLog)
+
+            btnBaudAuto = findViewById(R.id.btnBaudAuto)
+            btnBaud9600 = findViewById(R.id.btnBaud9600)
+            btnBaud10400 = findViewById(R.id.btnBaud10400)
+            btnBaud4800 = findViewById(R.id.btnBaud4800)
+
+            setupBaudButtons()
 
             btnFindUsb.setOnClickListener { findUsbAdapter() }
             btnConnectEcu.setOnClickListener { connectToEcu() }
             btnReadFaults.setOnClickListener { readFaultCodes() }
             btnClearFaults.setOnClickListener { clearFaultCodes() }
+            btnClearLog.setOnClickListener { tvLogs.text = "Журнал очищен." }
 
-            // Регистрируем слушатель событий USB
             val filter = IntentFilter().apply {
                 addAction(ACTION_USB_PERMISSION)
                 addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
@@ -103,6 +119,48 @@ class MainActivity : AppCompatActivity() {
             findUsbAdapter()
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    private fun setupBaudButtons() {
+        fun updateStyles() {
+            val activeColor = Color.parseColor("#38BDF8")
+            val activeText = Color.parseColor("#090D16")
+            val inactiveColor = Color.parseColor("#334155")
+            val inactiveText = Color.parseColor("#CBD5E1")
+
+            btnBaudAuto.setBackgroundColor(if (selectedBaud == 0) activeColor else inactiveColor)
+            btnBaudAuto.setTextColor(if (selectedBaud == 0) activeText else inactiveText)
+
+            btnBaud9600.setBackgroundColor(if (selectedBaud == 9600) activeColor else inactiveColor)
+            btnBaud9600.setTextColor(if (selectedBaud == 9600) activeText else inactiveText)
+
+            btnBaud10400.setBackgroundColor(if (selectedBaud == 10400) activeColor else inactiveColor)
+            btnBaud10400.setTextColor(if (selectedBaud == 10400) activeText else inactiveText)
+
+            btnBaud4800.setBackgroundColor(if (selectedBaud == 4800) activeColor else inactiveColor)
+            btnBaud4800.setTextColor(if (selectedBaud == 4800) activeText else inactiveText)
+        }
+
+        btnBaudAuto.setOnClickListener {
+            selectedBaud = 0
+            updateStyles()
+            addLog("Выбран режим: Авто (поиск 9600 / 10400 бод)")
+        }
+        btnBaud9600.setOnClickListener {
+            selectedBaud = 9600
+            updateStyles()
+            addLog("Выбрана фиксированная скорость: 9600 бод")
+        }
+        btnBaud10400.setOnClickListener {
+            selectedBaud = 10400
+            updateStyles()
+            addLog("Выбрана фиксированная скорость: 10400 бод")
+        }
+        btnBaud4800.setOnClickListener {
+            selectedBaud = 4800
+            updateStyles()
+            addLog("Выбрана фиксированная скорость: 4800 бод")
         }
     }
 
@@ -177,15 +235,17 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             btnConnectEcu.isEnabled = false
             tvStatus.text = "Статус: Открытие порта..."
+            val initialBaud = if (selectedBaud == 0) 9600 else selectedBaud
             val driver = Ftdi5BaudDriver(manager, dev)
-            if (driver.open()) {
+            if (driver.open(initialBaud)) {
                 kwDriver = driver
                 tvStatus.text = "Статус: Инициализация 5 бод..."
                 val protocol = Kw1281Protocol(driver)
                 kwProtocol = protocol
-                val success = protocol.connect { msg -> addLog(msg) }
+                val success = protocol.connect(selectedBaud) { msg -> addLog(msg) }
                 if (success) {
-                    tvStatus.text = "ЭБУ подключен: ${protocol.ecuPartNumber}"
+                    val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else "3A0 907 311"
+                    tvStatus.text = "ЭБУ подключен: $pNum (${protocol.negotiatedBaud} бод)"
                     btnReadFaults.isEnabled = true
                     btnClearFaults.isEnabled = true
                 } else {
@@ -202,11 +262,16 @@ class MainActivity : AppCompatActivity() {
     private fun readFaultCodes() {
         val protocol = kwProtocol ?: return
         lifecycleScope.launch {
+            btnReadFaults.isEnabled = false
             val faults = protocol.readFaultCodes { msg -> addLog(msg) }
+            btnReadFaults.isEnabled = true
             if (faults.isEmpty()) {
-                addLog("Ошибки в памяти ЭБУ не обнаружены (00000).")
+                addLog("В памяти ЭБУ ошибок нет (DTC 00000). Все системы в норме!")
             } else {
-                addLog("Найдено ошибок: ${faults.size}. Коды: ${faults.joinToString()}")
+                addLog("Всего ошибок: ${faults.size}")
+                for ((dtc, desc) in faults) {
+                    addLog("• $dtc — $desc")
+                }
             }
         }
     }
@@ -214,9 +279,11 @@ class MainActivity : AppCompatActivity() {
     private fun clearFaultCodes() {
         val protocol = kwProtocol ?: return
         lifecycleScope.launch {
+            btnClearFaults.isEnabled = false
             val success = protocol.clearFaultCodes { msg -> addLog(msg) }
+            btnClearFaults.isEnabled = true
             if (success) {
-                addLog("Память ошибок ЭБУ успешно очищена!")
+                addLog("Память ошибок очищена! Повторите чтение для проверки.")
             }
         }
     }

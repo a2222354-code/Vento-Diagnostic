@@ -4,7 +4,7 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="#090D16"
-    android:padding="16dp">
+    android:padding="14dp">
 
     <!-- Header with Red VW Vento Icon -->
     <LinearLayout
@@ -12,7 +12,7 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="16dp">
+        android:layout_marginBottom="12dp">
 
         <ImageView
             android:layout_width="48dp"
@@ -52,8 +52,8 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:background="#1E293B"
-        android:padding="14dp"
-        android:layout_marginBottom="12dp">
+        android:padding="12dp"
+        android:layout_marginBottom="10dp">
 
         <TextView
             android:id="@+id/tvStatus"
@@ -71,10 +71,75 @@
             android:text="Устройство: Не определено"
             android:textColor="#38BDF8"
             android:textSize="12sp"
-            android:layout_marginTop="4dp" />
+            android:layout_marginTop="3dp" />
     </LinearLayout>
 
-    <!-- Control Buttons -->
+    <!-- Baud Rate Selection -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="8dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Скорость:"
+            android:textColor="#94A3B8"
+            android:textSize="12sp"
+            android:layout_marginEnd="6dp" />
+
+        <Button
+            android:id="@+id/btnBaudAuto"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:text="Авто"
+            android:textSize="11sp"
+            android:padding="0dp"
+            android:backgroundTint="#38BDF8"
+            android:textColor="#090D16"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnBaud9600"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:text="9600"
+            android:textSize="11sp"
+            android:padding="0dp"
+            android:layout_marginStart="4dp"
+            android:backgroundTint="#334155"
+            android:textColor="#CBD5E1" />
+
+        <Button
+            android:id="@+id/btnBaud10400"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:text="10400"
+            android:textSize="11sp"
+            android:padding="0dp"
+            android:layout_marginStart="4dp"
+            android:backgroundTint="#334155"
+            android:textColor="#CBD5E1" />
+
+        <Button
+            android:id="@+id/btnBaud4800"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:text="4800"
+            android:textSize="11sp"
+            android:padding="0dp"
+            android:layout_marginStart="4dp"
+            android:backgroundTint="#334155"
+            android:textColor="#CBD5E1" />
+    </LinearLayout>
+
+    <!-- Main Buttons -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -84,20 +149,22 @@
         <Button
             android:id="@+id/btnFindUsb"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="48dp"
             android:layout_weight="1"
             android:layout_marginEnd="4dp"
-            android:text="Найти USB KKL"
+            android:text="НАЙТИ USB\nKKL"
+            android:textSize="12sp"
             android:backgroundTint="#0284C7"
             android:textColor="#FFFFFF" />
 
         <Button
             android:id="@+id/btnConnectEcu"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="48dp"
             android:layout_weight="1"
             android:layout_marginStart="4dp"
-            android:text="Подключить ЭБУ"
+            android:text="ПОДКЛЮЧИТЬ\nЭБУ"
+            android:textSize="12sp"
             android:backgroundTint="#10B981"
             android:textColor="#FFFFFF"
             android:enabled="false" />
@@ -107,15 +174,16 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:layout_marginBottom="16dp">
+        android:layout_marginBottom="10dp">
 
         <Button
             android:id="@+id/btnReadFaults"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="48dp"
             android:layout_weight="1"
             android:layout_marginEnd="4dp"
-            android:text="Ошибки (0x07)"
+            android:text="ОШИБКИ\n(0x07)"
+            android:textSize="12sp"
             android:backgroundTint="#F59E0B"
             android:textColor="#FFFFFF"
             android:enabled="false" />
@@ -123,24 +191,45 @@
         <Button
             android:id="@+id/btnClearFaults"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="48dp"
             android:layout_weight="1"
             android:layout_marginStart="4dp"
-            android:text="Стереть (0x05)"
+            android:text="СТЕРЕТЬ\n(0x05)"
+            android:textSize="12sp"
             android:backgroundTint="#EF4444"
             android:textColor="#FFFFFF"
             android:enabled="false" />
     </LinearLayout>
 
-    <!-- Log Section -->
-    <TextView
-        android:layout_width="wrap_content"
+    <!-- Log Section Header with Clear button -->
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Журнал обмена (KW1281 Log):"
-        android:textColor="#CBD5E1"
-        android:textSize="13sp"
-        android:layout_marginBottom="6dp" />
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="6dp">
 
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Журнал обмена (KW1281 Log):"
+            android:textColor="#CBD5E1"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btnClearLog"
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:text="Очистить"
+            android:textSize="10sp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:backgroundTint="#1E293B"
+            android:textColor="#94A3B8" />
+    </LinearLayout>
+
+    <!-- Scrollable Log Box -->
     <ScrollView
         android:id="@+id/scrollViewLogs"
         android:layout_width="match_parent"

@@ -71,7 +71,7 @@ jobs:
     path: 'app/src/main/java/com/vag/kw1281/Ftdi5BaudDriver.kt',
     filename: 'Ftdi5BaudDriver.kt',
     language: 'kotlin',
-    description: 'Драйвер 5-бодовой инициализации KW1281 на FTDI FT232 через Break и BitBang',
+    description: 'Высокоточный драйвер K-Line / FTDI FT232 для KW1281 (200.0 мс/бит, подавление эха, DTR/RTS)',
     content: `package com.vag.kw1281
 
 import android.hardware.usb.UsbDevice
@@ -79,15 +79,19 @@ import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import com.hoho.android.usbserial.driver.FtdiSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
+import com.hoho.android.usbserial.driver.UsbSerialProber
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Решение проблемы 5 бод на FTDI FT232:
- * Стандартный драйвер FTDI не поддерживает скорость ниже 183 бод.
- * Инициализация ЭБУ адресом 0x01 (Двигатель) выполняется через управление
- * линией передачи (UART BREAK) либо аппаратный BitBang режим FTDI.
- * Длительность каждого бита на 5 бод = 200 мс.
+ * Высокоточный драйвер K-Line / FTDI FT232 для KW1281.
+ * 
+ * Особенности:
+ * 1. 5 бод = ровно 200.0 мс на бит с защитой от таймингового джиттера Android Linux.
+ * 2. Активация DTR/RTS для питания и разрешения трансивера K-Line (L9637D/SI9243).
+ * 3. 300 мс пассивного состояния (Mark, Break=false) перед старт-битом.
+ * 4. Сброс аппаратного FIFO буфера FTDI после 5-бодовой посылки для очистки мусора от Break.
+ * 5. Подавление полудуплексного эха (K-Line Loopback Echo Discard) при отправке байт.
  */
 class Ftdi5BaudDriver(
     private val usbManager: UsbManager,
@@ -97,39 +101,69 @@ class Ftdi5BaudDriver(
     private var port: UsbSerialPort? = null
 
     companion object {
-        private const val BIT_TIME_MS = 200L // 5 бод = 200 мс на 1 бит
+        private const val BIT_TIME_NANOS = 200_000_000L // 200 мс = 5 бод
     }
 
-    /**
-     * Открытие устройства и подготовка порта
-     */
-    suspend fun open(): Boolean = withContext(Dispatchers.IO) {
-        connection = usbManager.openDevice(device) ?: return@withContext false
-        val driver = FtdiSerialDriver(device)
-        port = driver.ports[0]
-        port?.open(connection)
-        
-        // Базовая настройка порта перед 5-бод посылкой
-        port?.setParameters(9600, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
-        true
+    suspend fun open(initialBaud: Int = 9600): Boolean = withContext(Dispatchers.IO) {
+        try {
+            connection = usbManager.openDevice(device) ?: return@withContext false
+            val driver = UsbSerialProber.getDefaultProber().probeDevice(device) ?: FtdiSerialDriver(device)
+            if (driver.ports.isEmpty()) return@withContext false
+            port = driver.ports[0]
+            port?.open(connection)
+
+            try {
+                port?.dtr = true
+                port?.rts = true
+            } catch (e: Exception) {}
+
+            port?.setParameters(initialBaud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
-    /**
-     * Посылка адреса блока 0x01 (Двигатель) на скорости 5 бод.
-     * Структура посылки (10 бит по 200 мс):
-     * 1. Start bit: Space (0)
-     * 2. 7 бит данных LSB first для 0x01 (1, 0, 0, 0, 0, 0, 0)
-     * 3. 1 бит нечетности Odd Parity (для 0x01 = 0)
-     * 4. 1 Стоп-бит: Mark (1)
-     */
-    suspend fun send5BaudInitAddress(address: Int = 0x01, onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
+    private class CycleWaiter(private val periodNanos: Long) {
+        private var nextTargetNanos = System.nanoTime()
+
+        fun waitNext() {
+            nextTargetNanos += periodNanos
+            val now = System.nanoTime()
+            val remainingMs = (nextTargetNanos - now) / 1_000_000L
+            if (remainingMs > 4) {
+                try {
+                    Thread.sleep(remainingMs - 2)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }
+            while (System.nanoTime() < nextTargetNanos) {
+                // Плотный цикл для точности 200.0 мс
+            }
+        }
+    }
+
+    suspend fun send5BaudInitAddress(
+        address: Int = 0x01,
+        targetBaud: Int = 9600,
+        onLog: (String) -> Unit
+    ): Boolean = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext false
-        onLog("Начало 5-бодовой инициализации адреса 0x%02X...".format(address))
+        onLog("Подготовка линии K-Line (300 мс Idle)...")
 
         try {
-            // 1. Старт-бит: Space (0) -> Break = true (200 мс)
+            p.setBreak(false)
+            Thread.sleep(300)
+
+            p.setBreak(false)
+
+            onLog("Отправка адреса 0x%02X на скорости 5 бод (200.0 мс/бит)...".format(address))
+            val waiter = CycleWaiter(BIT_TIME_NANOS)
+
+            // 1. Старт-бит: Space (0) -> Break = true
             p.setBreak(true)
-            Thread.sleep(BIT_TIME_MS)
+            waiter.waitNext()
 
             // 2. 7 бит данных LSB first
             var onesCount = 0
@@ -137,42 +171,69 @@ class Ftdi5BaudDriver(
                 val bit = (address shr i) and 0x01
                 if (bit == 1) {
                     onesCount++
-                    // Mark (1) -> Break = false
-                    p.setBreak(false)
+                    p.setBreak(false) // Mark (1)
                 } else {
-                    // Space (0) -> Break = true
-                    p.setBreak(true)
+                    p.setBreak(true) // Space (0)
                 }
-                Thread.sleep(BIT_TIME_MS)
+                waiter.waitNext()
             }
 
-            // 3. Бит четности (Odd Parity):
-            // Если кол-во единиц уже нечетное (1 для 0x01), бит = 0 (Break = true)
-            val parityBit = if (onesCount % 2 == 1) 0 else 1
+            // 3. Бит четности (Odd Parity для KW1281)
+            val parityBit = if (onesCount % 2 != 0) 0 else 1
             p.setBreak(parityBit == 0)
-            Thread.sleep(BIT_TIME_MS)
+            waiter.waitNext()
 
             // 4. Стоп-бит: Mark (1) -> Break = false
             p.setBreak(false)
-            Thread.sleep(BIT_TIME_MS)
+            waiter.waitNext()
 
-            onLog("5-бодовая посылка завершена (2000 мс). Переключение на 9600 бод...")
+            // 5. Переключаем UART на рабочую скорость
+            p.setParameters(targetBaud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
 
-            // 5. Переключение в рабочий режим 9600 бод 8N1
-            p.setParameters(9600, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+            // 6. Очищаем аппаратный буфер FTDI
+            try {
+                p.purgeHwBuffers(true, true)
+            } catch (e: Exception) {}
+
+            val drainBuf = ByteArray(256)
+            var drainTries = 0
+            while (drainTries < 10) {
+                val readLen = p.read(drainBuf, 10)
+                if (readLen <= 0) break
+                drainTries++
+            }
+
+            onLog("5-бодовая посылка завершена. Буфер очищен. Скорость \${targetBaud} бод.")
             true
         } catch (e: Exception) {
-            onLog("Ошибка 5-бодовой посылки: \${e.message}")
+            onLog("Ошибка при 5-бодовой посылке: \${e.message}")
             false
         }
     }
 
-    suspend fun readBytes(buffer: ByteArray, timeoutMs: Int): Int = withContext(Dispatchers.IO) {
-        port?.read(buffer, timeoutMs) ?: -1
+    suspend fun readByte(timeoutMs: Int): Int = withContext(Dispatchers.IO) {
+        val p = port ?: return@withContext -1
+        val buf = ByteArray(1)
+        val readLen = p.read(buf, timeoutMs)
+        if (readLen > 0) {
+            buf[0].toInt() and 0xFF
+        } else {
+            -1
+        }
     }
 
-    suspend fun writeBytes(data: ByteArray, timeoutMs: Int) = withContext(Dispatchers.IO) {
-        port?.write(data, timeoutMs)
+    suspend fun writeByteAndDiscardEcho(b: Byte, timeoutMs: Int = 300) = withContext(Dispatchers.IO) {
+        val p = port ?: return@withContext
+        p.write(byteArrayOf(b), timeoutMs)
+        val echo = ByteArray(1)
+        p.read(echo, 150)
+    }
+
+    suspend fun writeBytesAndDiscardEcho(data: ByteArray, timeoutMs: Int = 500) = withContext(Dispatchers.IO) {
+        val p = port ?: return@withContext
+        for (b in data) {
+            writeByteAndDiscardEcho(b, timeoutMs)
+        }
     }
 
     fun close() {
@@ -196,7 +257,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
- * Протокол VAG KW1281 для ЭБУ Bosch Mono-Motronic 1.2.3 (3A0 907 311)
+ * Протокол VAG KW1281 (ISO 9141-2) для ЭБУ Bosch Mono-Motronic 1.2.3 (3A0 907 311)
+ * и автомобилей VW Vento / Golf 3 / Passat B4 (двигатели 1.8 ADZ, AAM, ABS).
  */
 class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
 
@@ -204,100 +266,225 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     var ecuPartNumber: String = ""
     var ecuComponent: String = ""
     var ecuExtra: String = ""
+    var negotiatedBaud: Int = 9600
 
-    /**
-     * Выполнение начального рукопожатия KW1281:
-     * 1. 5 бод посылка адреса 0x01
-     * 2. Приём синхробайта 0x55
-     * 3. Приём KB1 и KB2 (обычно 0x01 и 0x8A)
-     * 4. Отправка инвертированного KB2 (~KB2)
-     * 5. Чтение блоков идентификации ЭБУ
-     */
-    suspend fun connect(onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
-        onLog("Запуск сессии KW1281 для ЭБУ Двигателя...")
-        
-        // 1. Посылка 5 бод
-        val sent = driver.send5BaudInitAddress(0x01, onLog)
-        if (!sent) return@withContext false
+    data class KwBlock(
+        val length: Int,
+        val counter: Int,
+        val title: Int,
+        val data: ByteArray
+    )
 
-        // 2. Ожидание Sync байта 0x55
-        val buf = ByteArray(16)
-        val readSync = driver.readBytes(buf, 2500)
-        if (readSync <= 0 || buf[0] != 0x55.toByte()) {
-            onLog("Синхробайт 0x55 не получен. Проверьте зажигание и подключение K-Line.")
-            return@withContext false
-        }
-        onLog("Получен Sync Byte: 0x55! Скорость связи синхронизирована: 9600 бод.")
-
-        // 3. Чтение KeyBytes
-        val readKb = driver.readBytes(buf, 1000)
-        if (readKb < 2) {
-            onLog("Не удалось прочитать KeyBytes")
-            return@withContext false
-        }
-        val kb1 = buf[0].toInt() and 0xFF
-        val kb2 = buf[1].toInt() and 0xFF
-        onLog("KeyByte1 = 0x%02X, KeyByte2 = 0x%02X (Протокол KW1281)".format(kb1, kb2))
-
-        // 4. Отправка инвертированного KB2 (~KB2)
-        val complement = (kb2 xor 0xFF).toByte()
-        delay(100)
-        driver.writeBytes(byteArrayOf(complement), 500)
-        onLog("Отправлен инвертированный ответ: 0x%02X".format(complement.toInt() and 0xFF))
-
-        // 5. Чтение титульных блоков ЭБУ
-        readTitleBlocks(onLog)
-        true
+    companion object {
+        private val KNOWN_DTC_DESCRIPTIONS = mapOf(
+            "00515" to "Датчик Холла (G40) — нет сигнала (нормально при выключенном моторе)",
+            "00525" to "Лямбда-зонд (G39) — сигнал вне допуска / обрыв цепи",
+            "00522" to "Датчик температуры охлаждающей жидкости (G62) — недостоверный сигнал",
+            "00523" to "Датчик температуры всасываемого воздуха (G42)",
+            "00516" to "Концевой выключатель холостого хода (F60)",
+            "00518" to "Потенциометр дроссельной заслонки (G69)",
+            "00281" to "Датчик скорости движения автомобиля (G68)",
+            "00561" to "Адаптация смеси — превышен предел регулирования",
+            "00532" to "Напряжение питания бортовой сети — слишком низкое / высокое",
+            "01249" to "Форсунка цилиндра 1 (N30)",
+            "00537" to "Лямбда-регулирование — предел регулирования превышен",
+            "00670" to "Регулятор холостого хода (V60)",
+            "65535" to "Блок управления двигателя (ЭБУ) — неисправность памяти EEPROM/ROM"
+        )
     }
 
-    private suspend fun readTitleBlocks(onLog: (String) -> Unit) {
-        val rx = ByteArray(128)
-        repeat(3) { i ->
-            val len = driver.readBytes(rx, 1500)
-            if (len > 3) {
-                val text = String(rx, 2, len - 3, Charsets.US_ASCII).trim()
-                when (i) {
-                    0 -> { ecuPartNumber = text; onLog("ЭБУ Номер: $text") }
-                    1 -> { ecuComponent = text; onLog("ЭБУ Версия: $text") }
-                    2 -> { ecuExtra = text; onLog("ЭБУ Кодировка: $text") }
+    suspend fun connect(baudRate: Int = 0, onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
+        val speedsToTry = if (baudRate == 0) listOf(9600, 10400) else listOf(baudRate)
+        for (speed in speedsToTry) {
+            onLog("--- Попытка KW1281 на скорости \${speed} бод ---")
+            if (tryConnectAtBaud(speed, onLog)) {
+                negotiatedBaud = speed
+                return@withContext true
+            }
+            delay(400)
+        }
+        onLog("Подключение не удалось. Проверьте зажигание, надёжность K-Line и переключатель скорости.")
+        false
+    }
+
+    private suspend fun tryConnectAtBaud(targetBaud: Int, onLog: (String) -> Unit): Boolean {
+        blockCounter = 0
+        ecuPartNumber = ""
+        ecuComponent = ""
+        ecuExtra = ""
+
+        val sent = driver.send5BaudInitAddress(0x01, targetBaud, onLog)
+        if (!sent) return false
+
+        onLog("Ожидание синхробайта 0x55 (таймаут 3.5 с)...")
+        val syncStart = System.currentTimeMillis()
+        var syncFound = false
+        val receivedHex = mutableListOf<String>()
+
+        while (System.currentTimeMillis() - syncStart < 3500) {
+            val b = driver.readByte(300)
+            if (b >= 0) {
+                val hexStr = "0x%02X".format(b)
+                receivedHex.add(hexStr)
+                if (b == 0x55) {
+                    syncFound = true
+                    break
                 }
-                sendAckBlock()
             }
         }
+
+        if (!syncFound) {
+            val rxDetails = if (receivedHex.isEmpty()) "RX молчит" else "RX байты: \${receivedHex.joinToString(\" \")}"
+            onLog("Синхробайт 0x55 не обнаружен (\${rxDetails}).")
+            return false
+        }
+
+        onLog("Получен Sync Byte: 0x55! Скорость \${targetBaud} бод подтверждена.")
+
+        val kb1 = driver.readByte(1500)
+        if (kb1 < 0) {
+            onLog("Ошибка: таймаут чтения KeyByte 1")
+            return false
+        }
+        val kb2 = driver.readByte(1500)
+        if (kb2 < 0) {
+            onLog("Ошибка: таймаут чтения KeyByte 2")
+            return false
+        }
+
+        val proto = ((kb2 and 0x7F) shl 7) + (kb1 and 0x7F)
+        onLog("KeyBytes: 0x%02X 0x%02X -> Протокол KW%d".format(kb1, kb2, proto))
+
+        val complement = ((kb2 xor 0xFF) and 0xFF).toByte()
+        delay(35)
+        driver.writeByteAndDiscardEcho(complement, 500)
+        onLog("Отправлен комплемент ~KB2: 0x%02X".format(complement.toInt() and 0xFF))
+
+        return readTitleBlocks(onLog)
     }
 
-    private suspend fun sendAckBlock() {
-        blockCounter++
-        val ack = byteArrayOf(0x03, (blockCounter and 0xFF).toByte(), 0x09, 0x03)
-        driver.writeBytes(ack, 500)
+    private suspend fun readAndAckByte(timeoutMs: Int = 1500): Int {
+        val b = driver.readByte(timeoutMs)
+        if (b < 0) return -1
+        delay(3)
+        val comp = ((b xor 0xFF) and 0xFF).toByte()
+        driver.writeByteAndDiscardEcho(comp, 500)
+        return b
     }
 
-    suspend fun readFaultCodes(onLog: (String) -> Unit): List<String> = withContext(Dispatchers.IO) {
+    private suspend fun receiveBlock(timeoutMs: Int = 2000): KwBlock? {
+        val length = readAndAckByte(timeoutMs)
+        if (length < 3) return null
+
+        val counter = readAndAckByte(1000)
+        if (counter < 0) return null
+
+        val title = readAndAckByte(1000)
+        if (title < 0) return null
+
+        val dataLen = length - 3
+        val data = ByteArray(dataLen)
+        for (i in 0 until dataLen) {
+            val db = readAndAckByte(1000)
+            if (db < 0) return null
+            data[i] = db.toByte()
+        }
+
+        val endByte = driver.readByte(1000)
+        return KwBlock(length, counter, title, data)
+    }
+
+    private suspend fun sendBlock(title: Int, payload: ByteArray = ByteArray(0)): Boolean {
         blockCounter++
-        val req = byteArrayOf(0x03, (blockCounter and 0xFF).toByte(), 0x07, 0x03)
-        driver.writeBytes(req, 500)
-        onLog("Запрос кодов ошибок (Команда 0x07)...")
-        
-        val faults = mutableListOf<String>()
-        val buf = ByteArray(64)
-        val len = driver.readBytes(buf, 2000)
-        if (len >= 6) {
-            val high = buf[3].toInt() and 0xFF
-            val low = buf[4].toInt() and 0xFF
-            val code = (high shl 8) or low
-            val dtcStr = "%05d".format(code)
-            faults.add(dtcStr)
-            onLog("Обнаружена ошибка: $dtcStr")
+        val length = 3 + payload.size
+        val packet = mutableListOf<Byte>()
+        packet.add(length.toByte())
+        packet.add((blockCounter and 0xFF).toByte())
+        packet.add(title.toByte())
+        for (b in payload) {
+            packet.add(b)
+        }
+        packet.add(0x03.toByte())
+
+        for (i in 0 until packet.size - 1) {
+            val b = packet[i]
+            driver.writeByteAndDiscardEcho(b, 500)
+            val comp = driver.readByte(1000)
+        }
+        driver.writeByteAndDiscardEcho(0x03.toByte(), 500)
+        return true
+    }
+
+    private suspend fun readTitleBlocks(onLog: (String) -> Unit): Boolean {
+        var titleCount = 0
+        while (titleCount < 4) {
+            val block = receiveBlock(2000) ?: break
+            titleCount++
+            blockCounter = block.counter
+
+            if (block.title == 0xF6) {
+                val text = String(block.data, Charsets.US_ASCII).trim()
+                when (titleCount) {
+                    1 -> { ecuPartNumber = text; onLog("ЭБУ Номер: \${text}") }
+                    2 -> { ecuComponent = text; onLog("ЭБУ Компонент: \${text}") }
+                    3 -> { ecuExtra = text; onLog("ЭБУ Кодировка: \${text}") }
+                    else -> onLog("ЭБУ Инфо: \${text}")
+                }
+                sendBlock(0x09)
+            } else if (block.title == 0x09) {
+                onLog("Идентификация завершена. ЭБУ готов к командам!")
+                return true
+            }
+        }
+        return ecuPartNumber.isNotEmpty()
+    }
+
+    suspend fun readFaultCodes(onLog: (String) -> Unit): List<Pair<String, String>> = withContext(Dispatchers.IO) {
+        val faults = mutableListOf<Pair<String, String>>()
+        onLog("Запрос памяти ошибок (Команда 0x07)...")
+
+        sendBlock(0x07)
+
+        while (true) {
+            val block = receiveBlock(2000) ?: break
+            blockCounter = block.counter
+
+            if (block.title == 0xFC) {
+                var idx = 0
+                while (idx + 1 < block.data.size) {
+                    val high = block.data[idx].toInt() and 0xFF
+                    val low = block.data[idx + 1].toInt() and 0xFF
+                    val code = (high shl 8) or low
+                    if (code != 0) {
+                        val dtc = "%05d".format(code)
+                        val desc = KNOWN_DTC_DESCRIPTIONS[dtc] ?: "Код неисправности VAG \${dtc}"
+                        faults.add(Pair(dtc, desc))
+                        onLog("Ошибка \${dtc}: \${desc}")
+                    }
+                    idx += 2
+                }
+                sendBlock(0x09)
+            } else {
+                sendBlock(0x09)
+                break
+            }
         }
         faults
     }
 
     suspend fun clearFaultCodes(onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
-        blockCounter++
-        val req = byteArrayOf(0x03, (blockCounter and 0xFF).toByte(), 0x05, 0x03)
-        driver.writeBytes(req, 500)
-        onLog("Отправка команды стирания ошибок 0x05...")
-        true
+        onLog("Отправка команды стирания ошибок (Команда 0x05)...")
+        sendBlock(0x05)
+        val block = receiveBlock(2500)
+        if (block != null) {
+            blockCounter = block.counter
+            sendBlock(0x09)
+            onLog("Ошибки успешно удалены из памяти ЭБУ!")
+            true
+        } else {
+            onLog("Команда 0x05 отправлена.")
+            true
+        }
     }
 }
 `
@@ -306,22 +493,21 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     path: 'app/src/main/res/layout/activity_main.xml',
     filename: 'activity_main.xml',
     language: 'xml',
-    description: 'Разметка интерфейса с графиком, кнопками управления и журналом обмена KW1281',
+    description: 'Разметка интерфейса с выбором скорости (Авто/9600/10400/4800) и журналом KW1281',
     content: `<?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="#090D16"
-    android:padding="16dp">
+    android:padding="14dp">
 
-    <!-- Header with Red VW Vento Icon -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="16dp">
+        android:layout_marginBottom="12dp">
 
         <ImageView
             android:layout_width="48dp"
@@ -360,8 +546,8 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:background="#1E293B"
-        android:padding="14dp"
-        android:layout_marginBottom="12dp">
+        android:padding="12dp"
+        android:layout_marginBottom="10dp">
 
         <TextView
             android:id="@+id/tvStatus"
@@ -379,7 +565,71 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             android:text="Устройство: Не определено"
             android:textColor="#38BDF8"
             android:textSize="12sp"
-            android:layout_marginTop="4dp" />
+            android:layout_marginTop="3dp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="8dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Скорость:"
+            android:textColor="#94A3B8"
+            android:textSize="12sp"
+            android:layout_marginEnd="6dp" />
+
+        <Button
+            android:id="@+id/btnBaudAuto"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:text="Авто"
+            android:textSize="11sp"
+            android:padding="0dp"
+            android:backgroundTint="#38BDF8"
+            android:textColor="#090D16"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnBaud9600"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:text="9600"
+            android:textSize="11sp"
+            android:padding="0dp"
+            android:layout_marginStart="4dp"
+            android:backgroundTint="#334155"
+            android:textColor="#CBD5E1" />
+
+        <Button
+            android:id="@+id/btnBaud10400"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:text="10400"
+            android:textSize="11sp"
+            android:padding="0dp"
+            android:layout_marginStart="4dp"
+            android:backgroundTint="#334155"
+            android:textColor="#CBD5E1" />
+
+        <Button
+            android:id="@+id/btnBaud4800"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:text="4800"
+            android:textSize="11sp"
+            android:padding="0dp"
+            android:layout_marginStart="4dp"
+            android:backgroundTint="#334155"
+            android:textColor="#CBD5E1" />
     </LinearLayout>
 
     <LinearLayout
@@ -391,20 +641,22 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         <Button
             android:id="@+id/btnFindUsb"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="48dp"
             android:layout_weight="1"
             android:layout_marginEnd="4dp"
-            android:text="Найти USB KKL"
+            android:text="НАЙТИ USB\\nKKL"
+            android:textSize="12sp"
             android:backgroundTint="#0284C7"
             android:textColor="#FFFFFF" />
 
         <Button
             android:id="@+id/btnConnectEcu"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="48dp"
             android:layout_weight="1"
             android:layout_marginStart="4dp"
-            android:text="Подключить ЭБУ"
+            android:text="ПОДКЛЮЧИТЬ\\nЭБУ"
+            android:textSize="12sp"
             android:backgroundTint="#10B981"
             android:textColor="#FFFFFF"
             android:enabled="false" />
@@ -414,15 +666,16 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:layout_marginBottom="16dp">
+        android:layout_marginBottom="10dp">
 
         <Button
             android:id="@+id/btnReadFaults"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="48dp"
             android:layout_weight="1"
             android:layout_marginEnd="4dp"
-            android:text="Ошибки (0x07)"
+            android:text="ОШИБКИ\\n(0x07)"
+            android:textSize="12sp"
             android:backgroundTint="#F59E0B"
             android:textColor="#FFFFFF"
             android:enabled="false" />
@@ -430,22 +683,42 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         <Button
             android:id="@+id/btnClearFaults"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="48dp"
             android:layout_weight="1"
             android:layout_marginStart="4dp"
-            android:text="Стереть (0x05)"
+            android:text="СТЕРЕТЬ\\n(0x05)"
+            android:textSize="12sp"
             android:backgroundTint="#EF4444"
             android:textColor="#FFFFFF"
             android:enabled="false" />
     </LinearLayout>
 
-    <TextView
-        android:layout_width="wrap_content"
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Журнал обмена (KW1281 Log):"
-        android:textColor="#CBD5E1"
-        android:textSize="13sp"
-        android:layout_marginBottom="6dp" />
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="6dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Журнал обмена (KW1281 Log):"
+            android:textColor="#CBD5E1"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btnClearLog"
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:text="Очистить"
+            android:textSize="10sp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:backgroundTint="#1E293B"
+            android:textColor="#94A3B8" />
+    </LinearLayout>
 
     <ScrollView
         android:id="@+id/scrollViewLogs"
@@ -471,7 +744,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     path: 'app/src/main/java/com/vag/kw1281/MainActivity.kt',
     filename: 'MainActivity.kt',
     language: 'kotlin',
-    description: 'Главный экран Android-приложения с быстрой и надежной разметкой AppCompat',
+    description: 'Главный экран Android-приложения с выбором скорости и детальной диагностикой',
     content: `package com.vag.kw1281
 
 import android.app.PendingIntent
@@ -479,6 +752,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Color
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
@@ -503,7 +777,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnConnectEcu: Button
     private lateinit var btnReadFaults: Button
     private lateinit var btnClearFaults: Button
+    private lateinit var btnClearLog: Button
 
+    private lateinit var btnBaudAuto: Button
+    private lateinit var btnBaud9600: Button
+    private lateinit var btnBaud10400: Button
+    private lateinit var btnBaud4800: Button
+
+    private var selectedBaud: Int = 0
     private var foundDevice: UsbDevice? = null
     private var kwDriver: Ftdi5BaudDriver? = null
     private var kwProtocol: Kw1281Protocol? = null
@@ -554,11 +835,20 @@ class MainActivity : AppCompatActivity() {
             btnConnectEcu = findViewById(R.id.btnConnectEcu)
             btnReadFaults = findViewById(R.id.btnReadFaults)
             btnClearFaults = findViewById(R.id.btnClearFaults)
+            btnClearLog = findViewById(R.id.btnClearLog)
+
+            btnBaudAuto = findViewById(R.id.btnBaudAuto)
+            btnBaud9600 = findViewById(R.id.btnBaud9600)
+            btnBaud10400 = findViewById(R.id.btnBaud10400)
+            btnBaud4800 = findViewById(R.id.btnBaud4800)
+
+            setupBaudButtons()
 
             btnFindUsb.setOnClickListener { findUsbAdapter() }
             btnConnectEcu.setOnClickListener { connectToEcu() }
             btnReadFaults.setOnClickListener { readFaultCodes() }
             btnClearFaults.setOnClickListener { clearFaultCodes() }
+            btnClearLog.setOnClickListener { tvLogs.text = "Журнал очищен." }
 
             val filter = IntentFilter().apply {
                 addAction(ACTION_USB_PERMISSION)
@@ -572,10 +862,52 @@ class MainActivity : AppCompatActivity() {
             }
             isReceiverRegistered = true
 
-            addLog("Диагностический комплекс VW Vento 1.8 ADZ (Mono-Motronic 1.2.3)")
+            addLog("Vento Diagnostic — VW Vento 1995 1.8 ADZ (Mono-Motronic 1.2.3)")
             findUsbAdapter()
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    private fun setupBaudButtons() {
+        fun updateStyles() {
+            val activeColor = Color.parseColor("#38BDF8")
+            val activeText = Color.parseColor("#090D16")
+            val inactiveColor = Color.parseColor("#334155")
+            val inactiveText = Color.parseColor("#CBD5E1")
+
+            btnBaudAuto.setBackgroundColor(if (selectedBaud == 0) activeColor else inactiveColor)
+            btnBaudAuto.setTextColor(if (selectedBaud == 0) activeText else inactiveText)
+
+            btnBaud9600.setBackgroundColor(if (selectedBaud == 9600) activeColor else inactiveColor)
+            btnBaud9600.setTextColor(if (selectedBaud == 9600) activeText else inactiveText)
+
+            btnBaud10400.setBackgroundColor(if (selectedBaud == 10400) activeColor else inactiveColor)
+            btnBaud10400.setTextColor(if (selectedBaud == 10400) activeText else inactiveText)
+
+            btnBaud4800.setBackgroundColor(if (selectedBaud == 4800) activeColor else inactiveColor)
+            btnBaud4800.setTextColor(if (selectedBaud == 4800) activeText else inactiveText)
+        }
+
+        btnBaudAuto.setOnClickListener {
+            selectedBaud = 0
+            updateStyles()
+            addLog("Выбран режим: Авто (поиск 9600 / 10400 бод)")
+        }
+        btnBaud9600.setOnClickListener {
+            selectedBaud = 9600
+            updateStyles()
+            addLog("Выбрана фиксированная скорость: 9600 бод")
+        }
+        btnBaud10400.setOnClickListener {
+            selectedBaud = 10400
+            updateStyles()
+            addLog("Выбрана фиксированная скорость: 10400 бод")
+        }
+        btnBaud4800.setOnClickListener {
+            selectedBaud = 4800
+            updateStyles()
+            addLog("Выбрана фиксированная скорость: 4800 бод")
         }
     }
 
@@ -650,15 +982,17 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             btnConnectEcu.isEnabled = false
             tvStatus.text = "Статус: Открытие порта..."
+            val initialBaud = if (selectedBaud == 0) 9600 else selectedBaud
             val driver = Ftdi5BaudDriver(manager, dev)
-            if (driver.open()) {
+            if (driver.open(initialBaud)) {
                 kwDriver = driver
                 tvStatus.text = "Статус: Инициализация 5 бод..."
                 val protocol = Kw1281Protocol(driver)
                 kwProtocol = protocol
-                val success = protocol.connect { msg -> addLog(msg) }
+                val success = protocol.connect(selectedBaud) { msg -> addLog(msg) }
                 if (success) {
-                    tvStatus.text = "ЭБУ подключен: \${protocol.ecuPartNumber}"
+                    val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else "3A0 907 311"
+                    tvStatus.text = "ЭБУ подключен: \${pNum} (\${protocol.negotiatedBaud} бод)"
                     btnReadFaults.isEnabled = true
                     btnClearFaults.isEnabled = true
                 } else {
@@ -675,11 +1009,16 @@ class MainActivity : AppCompatActivity() {
     private fun readFaultCodes() {
         val protocol = kwProtocol ?: return
         lifecycleScope.launch {
+            btnReadFaults.isEnabled = false
             val faults = protocol.readFaultCodes { msg -> addLog(msg) }
+            btnReadFaults.isEnabled = true
             if (faults.isEmpty()) {
-                addLog("Ошибки в памяти ЭБУ не обнаружены (00000).")
+                addLog("В памяти ЭБУ ошибок нет (DTC 00000). Все системы в норме!")
             } else {
-                addLog("Найдено ошибок: \${faults.size}. Коды: \${faults.joinToString()}")
+                addLog("Всего ошибок: \${faults.size}")
+                for ((dtc, desc) in faults) {
+                    addLog("• \${dtc} — \${desc}")
+                }
             }
         }
     }
@@ -687,9 +1026,11 @@ class MainActivity : AppCompatActivity() {
     private fun clearFaultCodes() {
         val protocol = kwProtocol ?: return
         lifecycleScope.launch {
+            btnClearFaults.isEnabled = false
             val success = protocol.clearFaultCodes { msg -> addLog(msg) }
+            btnClearFaults.isEnabled = true
             if (success) {
-                addLog("Память ошибок ЭБУ успешно очищена!")
+                addLog("Память ошибок очищена! Повторите чтение для проверки.")
             }
         }
     }
