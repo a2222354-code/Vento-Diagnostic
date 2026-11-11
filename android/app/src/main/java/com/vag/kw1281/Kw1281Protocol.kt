@@ -43,14 +43,14 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
 
     suspend fun connect(baudRate: Int = 0, onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
         try {
-            val speedsToTry = if (baudRate == 0) listOf(9600, 10400) else listOf(baudRate)
+            val speedsToTry = if (baudRate == 0) listOf(9600, 10400, 4800) else listOf(baudRate)
             for (speed in speedsToTry) {
                 onLog("--- Попытка KW1281 на скорости $speed бод ---")
                 if (tryConnectAtBaud(speed, onLog)) {
                     negotiatedBaud = speed
                     return@withContext true
                 }
-                delay(300)
+                delay(400)
             }
             onLog("Подключение не удалось. Проверьте зажигание, надёжность K-Line и переключатель скорости.")
             false
@@ -82,6 +82,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 if (b >= 0) {
                     val hexStr = "0x%02X".format(b)
                     receivedHex.add(hexStr)
+                    onLog("Получен байт K-Line: $hexStr")
                     if (b == 0x55) {
                         syncFound = true
                         break
@@ -90,8 +91,9 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             }
 
             if (!syncFound) {
+                val errNote = driver.lastError?.let { " [Драйвер: $it]" } ?: ""
                 val rxDetails = if (receivedHex.isEmpty()) "линия молчит" else "получено: ${receivedHex.joinToString(" ")}"
-                onLog("Синхробайт 0x55 не обнаружен ($rxDetails).")
+                onLog("Синхробайт 0x55 не обнаружен ($rxDetails)$errNote.")
                 return false
             }
 
