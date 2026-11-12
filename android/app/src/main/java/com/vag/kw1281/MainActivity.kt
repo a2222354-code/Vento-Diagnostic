@@ -5,8 +5,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.res.ColorStateList
-import android.graphics.Color
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
@@ -33,12 +31,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnClearFaults: Button
     private lateinit var btnClearLog: Button
 
-    private lateinit var btnBaudAuto: Button
-    private lateinit var btnBaud9600: Button
-    private lateinit var btnBaud10400: Button
-    private lateinit var btnBaud4800: Button
-
-    private var selectedBaud: Int = 0 // 0 = Автоматически (9600 затем 10400)
     private var foundDevice: UsbDevice? = null
     private var kwDriver: Ftdi5BaudDriver? = null
     private var kwProtocol: Kw1281Protocol? = null
@@ -63,6 +55,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                     addLog("USB устройство отключено.")
+                    disconnectSession()
                     foundDevice = null
                     btnConnectEcu.isEnabled = false
                     btnReadFaults.isEnabled = false
@@ -77,7 +70,6 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         try {
-            // Глобальный перехватчик для предотвращения вылета приложения
             val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
             Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
                 addLog("Непредвиденная ошибка: ${throwable.message ?: throwable.javaClass.simpleName}")
@@ -98,13 +90,6 @@ class MainActivity : AppCompatActivity() {
             btnClearFaults = findViewById(R.id.btnClearFaults)
             btnClearLog = findViewById(R.id.btnClearLog)
 
-            btnBaudAuto = findViewById(R.id.btnBaudAuto)
-            btnBaud9600 = findViewById(R.id.btnBaud9600)
-            btnBaud10400 = findViewById(R.id.btnBaud10400)
-            btnBaud4800 = findViewById(R.id.btnBaud4800)
-
-            setupBaudButtons()
-
             btnFindUsb.setOnClickListener { findUsbAdapter() }
             btnConnectEcu.setOnClickListener { connectToEcu() }
             btnReadFaults.setOnClickListener { readFaultCodes() }
@@ -124,53 +109,10 @@ class MainActivity : AppCompatActivity() {
             isReceiverRegistered = true
 
             addLog("Vento Diagnostic — VW Vento 1995 1.8 ADZ (Mono-Motronic 1.2.3)")
+            addLog("Протокол KWP1281: фиксированная скорость 9600 бод, ЭБУ 0x01")
             findUsbAdapter()
         } catch (e: Exception) {
             e.printStackTrace()
-        }
-    }
-
-    private fun setupBaudButtons() {
-        fun updateStyles() {
-            try {
-                val activeColor = Color.parseColor("#38BDF8")
-                val activeText = Color.parseColor("#090D16")
-                val inactiveColor = Color.parseColor("#334155")
-                val inactiveText = Color.parseColor("#CBD5E1")
-
-                btnBaudAuto.backgroundTintList = ColorStateList.valueOf(if (selectedBaud == 0) activeColor else inactiveColor)
-                btnBaudAuto.setTextColor(if (selectedBaud == 0) activeText else inactiveText)
-
-                btnBaud9600.backgroundTintList = ColorStateList.valueOf(if (selectedBaud == 9600) activeColor else inactiveColor)
-                btnBaud9600.setTextColor(if (selectedBaud == 9600) activeText else inactiveText)
-
-                btnBaud10400.backgroundTintList = ColorStateList.valueOf(if (selectedBaud == 10400) activeColor else inactiveColor)
-                btnBaud10400.setTextColor(if (selectedBaud == 10400) activeText else inactiveText)
-
-                btnBaud4800.backgroundTintList = ColorStateList.valueOf(if (selectedBaud == 4800) activeColor else inactiveColor)
-                btnBaud4800.setTextColor(if (selectedBaud == 4800) activeText else inactiveText)
-            } catch (t: Throwable) {}
-        }
-
-        btnBaudAuto.setOnClickListener {
-            selectedBaud = 0
-            updateStyles()
-            addLog("Режим скорости: Авто (поиск 9600 / 10400 бод)")
-        }
-        btnBaud9600.setOnClickListener {
-            selectedBaud = 9600
-            updateStyles()
-            addLog("Режим скорости: 9600 бод")
-        }
-        btnBaud10400.setOnClickListener {
-            selectedBaud = 10400
-            updateStyles()
-            addLog("Режим скорости: 10400 бод")
-        }
-        btnBaud4800.setOnClickListener {
-            selectedBaud = 4800
-            updateStyles()
-            addLog("Режим скорости: 4800 бод")
         }
     }
 
@@ -204,12 +146,12 @@ class MainActivity : AppCompatActivity() {
         if (ftdi != null) {
             foundDevice = ftdi
             tvStatus.text = "Статус: Адаптер обнаружен!"
-            tvDeviceInfo.text = "Устройство: VID 0x%04X, PID 0x%04X".format(ftdi.vendorId, ftdi.productId)
+            tvDeviceInfo.text = "Устройство: VID 0x%04X, PID 0x%04X (FTDI / K-Line)".format(ftdi.vendorId, ftdi.productId)
             addLog("USB KKL адаптер найден: VID=0x%04X, PID=0x%04X".format(ftdi.vendorId, ftdi.productId))
             
             if (manager.hasPermission(ftdi)) {
                 btnConnectEcu.isEnabled = true
-                addLog("Права на работу с USB адаптером уже предоставлены.")
+                addLog("Разрешение USB предоставлено. Нажмите «ПОДКЛЮЧИТЬ ЭБУ».")
             } else {
                 btnConnectEcu.isEnabled = false
                 requestUsbPermission(ftdi)
@@ -218,7 +160,7 @@ class MainActivity : AppCompatActivity() {
             tvStatus.text = "Статус: KKL адаптер не найден"
             tvDeviceInfo.text = "Подключите USB-OTG кабель к телефону"
             btnConnectEcu.isEnabled = false
-            addLog("Адаптер FT232 / CH340 не обнаружен. Проверьте OTG соединение.")
+            addLog("Адаптер FT232 не обнаружен. Проверьте OTG соединение.")
         }
     }
 
@@ -239,6 +181,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun disconnectSession() {
+        try {
+            kwProtocol?.stopSession()
+        } catch (t: Throwable) {}
+        try {
+            kwDriver?.close()
+        } catch (t: Throwable) {}
+        kwProtocol = null
+        kwDriver = null
+    }
+
     private fun connectToEcu() {
         val dev = foundDevice ?: run {
             addLog("Сначала подключите USB KKL адаптер.")
@@ -251,24 +204,22 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 btnConnectEcu.isEnabled = false
-                tvStatus.text = "Статус: Открытие порта..."
+                btnReadFaults.isEnabled = false
+                btnClearFaults.isEnabled = false
+                tvStatus.text = "Статус: Инициализация K-Line 5 бод..."
                 
-                // Закрываем предыдущую открытую сессию
-                try {
-                    kwDriver?.close()
-                } catch (t: Throwable) {}
+                disconnectSession()
 
-                val initialBaud = if (selectedBaud == 0) 9600 else selectedBaud
                 val driver = Ftdi5BaudDriver(manager, dev)
-                if (driver.open(initialBaud)) {
+                if (driver.open(9600)) {
                     kwDriver = driver
-                    tvStatus.text = "Статус: Инициализация 5 бод..."
                     val protocol = Kw1281Protocol(driver)
                     kwProtocol = protocol
-                    val success = protocol.connect(selectedBaud) { msg -> addLog(msg) }
+                    val success = protocol.connect { msg -> addLog(msg) }
                     if (success) {
                         val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else "3A0 907 311"
-                        tvStatus.text = "ЭБУ подключен: $pNum (${protocol.negotiatedBaud} бод)"
+                        tvStatus.text = "ЭБУ подключен: $pNum (9600 бод)"
+                        btnConnectEcu.isEnabled = true
                         btnReadFaults.isEnabled = true
                         btnClearFaults.isEnabled = true
                     } else {
@@ -277,7 +228,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 } else {
                     tvStatus.text = "Не удалось открыть USB порт"
-                    addLog("Ошибка: Не удалось открыть порт USB адаптера.")
+                    val err = driver.lastError ?: "Неизвестная ошибка"
+                    addLog("Ошибка открытия порта: $err")
                     btnConnectEcu.isEnabled = true
                 }
             } catch (t: Throwable) {
@@ -299,7 +251,7 @@ class MainActivity : AppCompatActivity() {
                 if (faults.isEmpty()) {
                     addLog("В памяти ЭБУ ошибок нет (DTC 00000). Все системы в норме!")
                 } else {
-                    addLog("Всего ошибок: ${faults.size}")
+                    addLog("Всего обнаружено неисправностей: ${faults.size}")
                     for ((dtc, desc) in faults) {
                         addLog("• $dtc — $desc")
                     }
@@ -336,8 +288,6 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {}
             isReceiverRegistered = false
         }
-        try {
-            kwDriver?.close()
-        } catch (e: Exception) {}
+        disconnectSession()
     }
 }

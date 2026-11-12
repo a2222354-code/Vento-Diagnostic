@@ -74,69 +74,36 @@
             android:layout_marginTop="3dp" />
     </LinearLayout>
 
-    <!-- Baud Rate Selection -->
+    <!-- Fixed Baud & Protocol Info Badge -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="8dp">
+        android:background="#1E293B"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:layout_marginBottom="10dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Протокол: VAG KWP1281"
+            android:textColor="#94A3B8"
+            android:textSize="12sp"
+            android:textStyle="bold" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Скорость:"
-            android:textColor="#94A3B8"
+            android:text="9600 бод (8N1)"
+            android:textColor="#38BDF8"
             android:textSize="12sp"
-            android:layout_marginEnd="6dp" />
-
-        <Button
-            android:id="@+id/btnBaudAuto"
-            android:layout_width="0dp"
-            android:layout_height="36dp"
-            android:layout_weight="1"
-            android:text="Авто"
-            android:textSize="11sp"
-            android:padding="0dp"
-            android:backgroundTint="#38BDF8"
-            android:textColor="#090D16"
-            android:textStyle="bold" />
-
-        <Button
-            android:id="@+id/btnBaud9600"
-            android:layout_width="0dp"
-            android:layout_height="36dp"
-            android:layout_weight="1"
-            android:text="9600"
-            android:textSize="11sp"
-            android:padding="0dp"
-            android:layout_marginStart="4dp"
-            android:backgroundTint="#334155"
-            android:textColor="#CBD5E1" />
-
-        <Button
-            android:id="@+id/btnBaud10400"
-            android:layout_width="0dp"
-            android:layout_height="36dp"
-            android:layout_weight="1"
-            android:text="10400"
-            android:textSize="11sp"
-            android:padding="0dp"
-            android:layout_marginStart="4dp"
-            android:backgroundTint="#334155"
-            android:textColor="#CBD5E1" />
-
-        <Button
-            android:id="@+id/btnBaud4800"
-            android:layout_width="0dp"
-            android:layout_height="36dp"
-            android:layout_weight="1"
-            android:text="4800"
-            android:textSize="11sp"
-            android:padding="0dp"
-            android:layout_marginStart="4dp"
-            android:backgroundTint="#334155"
-            android:textColor="#CBD5E1" />
+            android:textStyle="bold"
+            android:typeface="monospace" />
     </LinearLayout>
 
     <!-- Main Buttons -->
