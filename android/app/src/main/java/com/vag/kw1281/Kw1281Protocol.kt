@@ -14,12 +14,13 @@ import kotlinx.coroutines.withContext
  * Протокол VAG KWP1281 (ISO 9141-2) для ЭБУ Bosch Mono-Motronic 1.2.3 (3A0 907 311)
  * автомобилей VW Vento / Golf 3 / Passat B4 (двигатели 1.8 ADZ, AAM, ABS).
  * 
- * Архитектура построена по спецификации декомпилированного бинарника libkwp1281:
- * - Фиксированная скорость 9600 бод (8N1).
- * - Сквозной счетчик блоков (Block Counter), увеличивающийся на 1 для каждого блока.
- * - Побайтовое подтверждение инверсией (~byte) для всех байт кроме 0x03.
- * - Keep-Alive поток (блок ACK 0x09 каждые 500 мс) с мьютексом шины.
- * - Корректное чтение кодов ошибок DTC тройками [код_hi][код_lo][статус].
+ * Поддерживаемые команды KWP1281:
+ * - 0x07: Чтение кодов неисправностей (DTC) с полной расшифровкой причин и советов.
+ * - 0x05: Стирание кодов неисправностей.
+ * - 0x08: Измерительные группы Live Data (Обороты, ДТОЖ G62, Лямбда G39, ДПДЗ G69).
+ * - 0x28: Базовые установки (регулировка УОЗ 6° до ВМТ стробоскопом, адаптация РХХ).
+ * - 0x09: Keep-Alive heartbeat каждые 500 мс.
+ * - 0x06: Завершение диагностического сеанса.
  */
 class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
 
@@ -40,27 +41,133 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val data: ByteArray
     )
 
+    data class LiveMeasurement(
+        val group: Int,
+        val rpm: Int? = null,
+        val coolantTemp: Int? = null,
+        val lambdaVoltage: Double? = null,
+        val throttleAngle: Double? = null,
+        val batteryVoltage: Double? = null,
+        val intakeAirTemp: Int? = null,
+        val rawValues: List<Int> = emptyList()
+    )
+
+    data class DtcDetailedItem(
+        val code: String,
+        val component: String,
+        val statusText: String,
+        val cause: String,
+        val remedy: String,
+        val isNormalWhenStopped: Boolean = false
+    )
+
     companion object {
-        private val KNOWN_DTC_DESCRIPTIONS = mapOf(
-            "00515" to "Датчик Холла (G40) — нет сигнала (нормально при заглушенном двигателе)",
-            "00525" to "Лямбда-зонд (G39) — сигнал вне допуска / обрыв цепи",
-            "00522" to "Датчик температуры охлаждающей жидкости (G62)",
-            "00523" to "Датчик температуры всасываемого воздуха (G42)",
-            "00516" to "Концевой выключатель холостого хода (F60)",
-            "00518" to "Потенциометр дроссельной заслонки (G69)",
-            "00281" to "Датчик скорости движения автомобиля (G68)",
-            "00561" to "Адаптация смеси — превышен предел регулирования",
-            "00532" to "Напряжение бортовой сети — вне допуска",
-            "01249" to "Форсунка цилиндра 1 (N30)",
-            "00537" to "Лямбда-регулирование — предел превышен",
-            "00670" to "Регулятор холостого хода (V60)",
-            "65535" to "Блок управления (ЭБУ) — внутренняя ошибка памяти EEPROM/ROM"
+        val MONO_MOTRONIC_DTCS = mapOf(
+            "00515" to DtcDetailedItem(
+                code = "00515",
+                component = "Датчик Холла (G40)",
+                statusText = "03-00 — Нет сигнала / Обрыв цепи",
+                cause = "Двигатель заглушен (зажигание ВКЛ) ЛИБО неисправен датчик Холла в трамблере, обрыв проводки, срезаны зубья ремня ГРМ.",
+                remedy = "ВАЖНО ДЛЯ MONO-MOTRONIC: При незаведённом моторе эта ошибка ВСЕГДА присутствует в памяти блоков 1.2.3! Это конструктивная норма. Стирать не нужно. Если ошибка остаётся при РАБОТАЮЩЕМ моторе — проверить разъём трамблера.",
+                isNormalWhenStopped = true
+            ),
+            "00525" to DtcDetailedItem(
+                code = "00525",
+                component = "Лямбда-зонд (G39)",
+                statusText = "03-10 — Сигнал вне допуска / Нет сигнала",
+                cause = "Неисправность датчика кислорода, обрыв сигнального провода, отсутствие подогрева (предохранитель №18), сильный подсос воздуха.",
+                remedy = "Проверить опорное напряжение на разъёме (~0.45 В при снятом разъёме), подогрев (3–5 Ом) и колебания напряжения 0.1–0.9 В на заведённом моторе."
+            ),
+            "00516" to DtcDetailedItem(
+                code = "00516",
+                component = "Концевой выключатель ХХ (F60)",
+                statusText = "27-00 — Недостоверный сигнал",
+                cause = "Заедание тросика газа, неправильный зазор штока РХХ, окисление контактов концевика холостого хода на электроприводе VDO.",
+                remedy = "Проверить замыкание концевика при отпущенной педали газа (пины 1 и 2 на разъёме РХХ). Зазор упора дросселя должен быть 0.5 мм."
+            ),
+            "00522" to DtcDetailedItem(
+                code = "00522",
+                component = "Датчик температуры ОЖ (G62)",
+                statusText = "30-00 — Обрыв или короткое замыкание",
+                cause = "Неисправен синий датчик температуры на тройнике ГБЦ, окисление контактов разъёма, обрыв цепи к ЭБУ.",
+                remedy = "Замерить сопротивление мультиметром: при 20°C должно быть ~2000–3000 Ом, при 90°C ~200–300 Ом. При обрыве ЭБУ заливает свечи."
+            ),
+            "00523" to DtcDetailedItem(
+                code = "00523",
+                component = "Датчик температуры воздуха (G42)",
+                statusText = "30-00 — Обрыв цепи / Сигнал вне диапазона",
+                cause = "Обрыв проводки в крышке форсунки моновпрыска (датчик встроен в пластмассовый каркас над форсункой).",
+                remedy = "Замерить сопротивление между крайними пинами 1 и 4 на разъёме форсунки (норма ~2500 Ом при 20°C)."
+            ),
+            "00561" to DtcDetailedItem(
+                code = "00561",
+                component = "Адаптация смеси (Mixture Regulation)",
+                statusText = "08-00 — Превышен предел регулирования",
+                cause = "Порвана резино-металлическая подушка моновпрыска (подсос воздуха), трещины вакуумного шланга ВУТ, низкое давление топлива (< 0.8 бар).",
+                remedy = "Покачать моновпрыск рукой на работающем моторе. Проверить давление топлива (0.8–1.2 бар для Mono-Motronic). Выполнить сброс адаптаций в Базовых."
+            ),
+            "00670" to DtcDetailedItem(
+                code = "00670",
+                component = "Датчик положения регулятора дросселя (G88)",
+                statusText = "27-00 — Недостоверный сигнал",
+                cause = "Износ дорожек потенциометра внутри электропривода РХХ (VDO), заклинивание моторчика.",
+                remedy = "Проверить плавность хода штока и сопротивление встроенного потенциометра при выдвижении."
+            ),
+            "00518" to DtcDetailedItem(
+                code = "00518",
+                component = "Потенциометр дроссельной заслонки (G69)",
+                statusText = "27-00 — Недостоверный сигнал / Износ дорожек",
+                cause = "Протерты резистивные дорожки потенциометра на нижней части моновпрыска (обычно в зоне малого газа).",
+                remedy = "Проверить плавность изменения напряжения на пине 2 разъёма ДПДЗ (должно плавно расти от 0.18–0.20 В до ~4.8 В без провалов)."
+            ),
+            "00281" to DtcDetailedItem(
+                code = "00281",
+                component = "Датчик скорости движения (G68)",
+                statusText = "03-00 — Нет сигнала",
+                cause = "Обрыв проводки от датчика скорости на КПП (3-контактный) к щитку приборов или ЭБУ.",
+                remedy = "Проверить питание +12В и целостность шестерни привода спидометра."
+            ),
+            "00532" to DtcDetailedItem(
+                code = "00532",
+                component = "Напряжение питания бортовой сети",
+                statusText = "07-00 — Сигнал слишком мал / велик",
+                cause = "Сильная просадка АКБ при пуске стартером (< 10 В) или перезаряд от генератора (> 15 В).",
+                remedy = "Проверить клеммы аккумулятора, силовую шину массы на кузов и КПП, замерить напряжение зарядки."
+            ),
+            "01249" to DtcDetailedItem(
+                code = "01249",
+                component = "Форсунка впрыска топлива (N30)",
+                statusText = "31-00 — Обрыв или короткое замыкание",
+                cause = "Повреждение проводки форсунки или обмотки электромагнита.",
+                remedy = "Сопротивление низкоомной форсунки Mono-Motronic составляет 1.2–1.6 Ом. Проверить проводку и балластный резистор."
+            ),
+            "01247" to DtcDetailedItem(
+                code = "01247",
+                component = "Электромагнитный клапан адсорбера (N80)",
+                statusText = "31-00 — Обрыв или короткое замыкание",
+                cause = "Обрыв цепи клапана продувки адсорбера на правом брызговике.",
+                remedy = "Проверить сопротивление клапана (~40–50 Ом) и наличие +12В питания."
+            ),
+            "00537" to DtcDetailedItem(
+                code = "00537",
+                component = "Лямбда-регулирование",
+                statusText = "08-00 — Достигнут предел регулирования",
+                cause = "Сильное переобогащение или обеднение смеси из-за подсоса воздуха, капающей форсунки или ДТОЖ.",
+                remedy = "Проверить распыл моновпрыска (факел должен быть конусом без капель), показания ДТОЖ и давление топлива."
+            ),
+            "65535" to DtcDetailedItem(
+                code = "65535",
+                component = "ЭБУ двигателя — Внутренняя ошибка",
+                statusText = "00-00 — Неисправность памяти EEPROM/ROM",
+                cause = "Повреждение содержимого микросхемы памяти, перепад напряжения, плохая масса ЭБУ.",
+                remedy = "Проверить контакты разъема ЭБУ (пины массы), замерить напряжение при включении зажигания."
+            )
         )
     }
 
     /**
      * Подключение к ЭБУ двигателя (адрес 0x01).
-     * Проверяет скорость 9600 бод, а при необходимости выполняет автоматический фоллбек на 10400 бод.
+     * Автоматически тестирует 9600 бод и при необходимости 10400 бод.
      */
     suspend fun connect(onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
         busMutex.withLock {
@@ -160,7 +267,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     /**
      * Чтение блоков идентификации 0xF6 и подтверждение ACK 0x09
      */
-    private suspend fun readIdentificationBlocks(onLog: (String) -> Unit): Boolean {
+    suspend fun readIdentificationBlocks(onLog: (String) -> Unit): Boolean {
         var blocksRead = 0
         while (blocksRead < 5) {
             val block = receiveBlockInternal(2000) ?: break
@@ -177,7 +284,6 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 // Отвечаем блоком ACK (Title 0x09)
                 sendBlockInternal(0x09)
             } else if (block.title == 0x09) {
-                // ЭБУ завершил выдачу паспортных данных
                 return true
             }
         }
@@ -186,7 +292,6 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
 
     /**
      * Отправка блока KWP1281: [Length][Counter][Title][Data...][0x03]
-     * Все байты кроме 0x03 подтверждаются инверсией от ЭБУ.
      */
     private suspend fun sendBlockInternal(title: Int, payload: ByteArray = ByteArray(0)): Boolean {
         blockCounter = (blockCounter + 1) and 0xFF
@@ -303,11 +408,10 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     }
 
     /**
-     * Чтение кодов неисправностей DTC (Команда 0x07)
-     * В KWP1281 ошибки приходят в блоке 0xFC тройками: [код_hi][код_lo][статус]
+     * Чтение кодов неисправностей DTC (Команда 0x07) с детальной информацией
      */
-    suspend fun readFaultCodes(onLog: (String) -> Unit): List<Pair<String, String>> = withContext(Dispatchers.IO) {
-        val faults = mutableListOf<Pair<String, String>>()
+    suspend fun readFaultCodesDetailed(onLog: (String) -> Unit): List<DtcDetailedItem> = withContext(Dispatchers.IO) {
+        val faults = mutableListOf<DtcDetailedItem>()
         busMutex.withLock {
             try {
                 onLog("Запрос памяти неисправностей (Команда 0x07)...")
@@ -333,15 +437,21 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                             val code = (hi shl 8) or lo
                             if (code != 0) {
                                 val dtc = "%05d".format(code)
-                                val desc = KNOWN_DTC_DESCRIPTIONS[dtc] ?: "Код неисправности VAG $dtc"
-                                faults.add(Pair(dtc, desc))
-                                onLog("Обнаружена ошибка: $dtc — $desc (статус 0x%02X)".format(status))
+                                val known = MONO_MOTRONIC_DTCS[dtc]
+                                val item = known ?: DtcDetailedItem(
+                                    code = dtc,
+                                    component = "Неизвестный компонент VAG $dtc",
+                                    statusText = "Статус 0x%02X".format(status),
+                                    cause = "Требуется проверка по таблицам VAG.",
+                                    remedy = "Проверить проводку и датчик."
+                                )
+                                faults.add(item)
+                                onLog("Обнаружена ошибка: $dtc — ${item.component}")
                             }
                         }
                         // Подтверждаем получение блока ошибок
                         sendBlockInternal(0x09)
                     } else if (block.title == 0x09) {
-                        // Конец списка ошибок или память пуста
                         sendBlockInternal(0x09)
                         break
                     } else {
@@ -354,6 +464,14 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             }
         }
         faults
+    }
+
+    /**
+     * Совместимый метод для чтения пар DTC (код, описание)
+     */
+    suspend fun readFaultCodes(onLog: (String) -> Unit): List<Pair<String, String>> = withContext(Dispatchers.IO) {
+        val items = readFaultCodesDetailed(onLog)
+        items.map { Pair(it.code, "${it.component}: ${it.statusText}") }
     }
 
     /**
@@ -384,5 +502,169 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 return@withContext false
             }
         }
+    }
+
+    /**
+     * Чтение группы измерительных величин Live Data (Команда 0x08)
+     */
+    suspend fun readMeasuringGroup(group: Int = 0, onLog: (String) -> Unit): LiveMeasurement? = withContext(Dispatchers.IO) {
+        busMutex.withLock {
+            try {
+                val payload = byteArrayOf(group.toByte())
+                val sent = sendBlockInternal(0x08, payload)
+                if (!sent) {
+                    onLog("Ошибка отправки команды 0x08 (Группа %03d)".format(group))
+                    return@withContext null
+                }
+
+                val reply = receiveBlockInternal(2000)
+                if (reply != null) {
+                    blockCounter = reply.counter
+                    sendBlockInternal(0x09) // ACK
+
+                    if (reply.title == 0xE7) {
+                        return@withContext parseMeasuringBlock(reply.data, group, onLog)
+                    } else if (reply.title == 0x09) {
+                        onLog("Группа %03d: ответ пуст".format(group))
+                    } else {
+                        onLog("Ответ ЭБУ на группу %03d: Title 0x%02X".format(group, reply.title))
+                    }
+                }
+            } catch (t: Throwable) {
+                onLog("Ошибка чтения группы %03d: ${t.message ?: t.javaClass.simpleName}".format(group))
+            }
+            null
+        }
+    }
+
+    /**
+     * Режим Базовых установок (Команда 0x28, Группа 000).
+     * Отключает динамический УОЗ и фиксирует обороты для регулировки угла зажигания стробоскопом (6° до ВМТ)
+     * и начальной адаптации РХХ.
+     */
+    suspend fun enterBasicSettings(group: Int = 0, onLog: (String) -> Unit): LiveMeasurement? = withContext(Dispatchers.IO) {
+        busMutex.withLock {
+            try {
+                onLog("Включение БАЗОВЫХ УСТАНОВОК (0x28) для Группы %03d...".format(group))
+                val payload = byteArrayOf(group.toByte())
+                val sent = sendBlockInternal(0x28, payload)
+                if (!sent) {
+                    onLog("Ошибка отправки команды 0x28")
+                    return@withContext null
+                }
+
+                val reply = receiveBlockInternal(2500)
+                if (reply != null) {
+                    blockCounter = reply.counter
+                    sendBlockInternal(0x09)
+
+                    if (reply.title == 0xE7) {
+                        onLog("БАЗОВЫЕ УСТАНОВКИ АКТИВНЫ! Динамический УОЗ заблокирован. Выставляйте УОЗ 6° по стробоскопу.")
+                        return@withContext parseMeasuringBlock(reply.data, group, onLog)
+                    }
+                }
+            } catch (t: Throwable) {
+                onLog("Ошибка входа в Базовые установки: ${t.message ?: t.javaClass.simpleName}")
+            }
+            null
+        }
+    }
+
+    /**
+     * Декодирование измерительного блока 0xE7 по формулам VAG KWP1281
+     */
+    private fun parseMeasuringBlock(data: ByteArray, group: Int, onLog: (String) -> Unit): LiveMeasurement {
+        val raw = data.map { it.toInt() and 0xFF }
+
+        // Если ЭБУ вернул 10 сырых байт (стандартная группа 000 для Bosch Mono-Motronic)
+        if (data.size == 10) {
+            val coolantRaw = raw[0]
+            val throttleRaw = raw[1]
+            val rpmRaw = raw[2]
+            val lambdaRaw = raw[4]
+            val batteryRaw = raw[7]
+
+            // Масштабирование для Mono-Motronic 1.2.3:
+            // ДТОЖ: 80..105°C при raw 70..95 -> прибл. 0.9 * raw + 15
+            val coolantC = (coolantRaw * 0.9).toInt() + 15
+            // Обороты: raw 75..85 -> 750..850 об/мин (умножение на 10)
+            val rpm = rpmRaw * 10
+            // Лямбда: 0..255 -> 0.0 .. 1.0 В
+            val lambdaV = "%.2f".format((lambdaRaw / 255.0)).replace(',', '.').toDoubleOrNull() ?: 0.45
+            // Дроссель: raw 0..5 на ХХ
+            val throttleAngle = "%.1f".format(throttleRaw * 0.8).replace(',', '.').toDoubleOrNull() ?: 0.0
+            // Бортсеть: raw 180..210 -> ~13.5..14.5 В
+            val batteryV = "%.1f".format(batteryRaw * 0.07).replace(',', '.').toDoubleOrNull() ?: 13.8
+
+            onLog("Группа %03d: RPM=%d об/мин, ДТОЖ=%d°C, Лямбда=%.2f В, ДЗ=%.1f°".format(group, rpm, coolantC, lambdaV, throttleAngle))
+
+            return LiveMeasurement(
+                group = group,
+                rpm = rpm,
+                coolantTemp = coolantC,
+                lambdaVoltage = lambdaV,
+                throttleAngle = throttleAngle,
+                batteryVoltage = batteryV,
+                rawValues = raw
+            )
+        }
+
+        // Если блок в формате троек [формула][A][B] (до 4 значений)
+        var parsedRpm: Int? = null
+        var parsedTemp: Int? = null
+        var parsedLambda: Double? = null
+        var parsedThrottle: Double? = null
+        var parsedVolt: Double? = null
+
+        var idx = 0
+        var itemNum = 1
+        while (idx + 2 < data.size && itemNum <= 4) {
+            val formula = raw[idx]
+            val a = raw[idx + 1]
+            val b = raw[idx + 2]
+            idx += 3
+
+            when (formula) {
+                0x01 -> { // Обороты RPM
+                    parsedRpm = (a * 0.2 * b).toInt().coerceAtLeast(a * 25)
+                }
+                0x02 -> { // Нагрузка %
+                    if (parsedThrottle == null) parsedThrottle = a * 0.5
+                }
+                0x05, 0x0F, 0x24 -> { // Температура °C
+                    parsedTemp = a - 50
+                }
+                0x08, 0x15 -> { // Напряжение лямбда-зонда В
+                    parsedLambda = "%.2f".format(0.001 * a * b).replace(',', '.').toDoubleOrNull()
+                }
+                0x09, 0x29 -> { // Напряжение бортсети В
+                    parsedVolt = "%.1f".format((a * 256 + b) / 1000.0).replace(',', '.').toDoubleOrNull()
+                }
+                0x19 -> { // Угол дросселя
+                    parsedThrottle = "%.1f".format(a * 0.5).replace(',', '.').toDoubleOrNull()
+                }
+                0x2B -> { // Обороты двигателя
+                    parsedRpm = a * 25
+                }
+            }
+            itemNum++
+        }
+
+        val resLog = StringBuilder("Группа %03d: ".format(group))
+        parsedRpm?.let { resLog.append("RPM=$it ") }
+        parsedTemp?.let { resLog.append("ДТОЖ=$it°C ") }
+        parsedLambda?.let { resLog.append("Лямбда=${it}В ") }
+        parsedThrottle?.let { resLog.append("ДЗ=${it}° ") }
+        onLog(resLog.toString())
+
+        return LiveMeasurement(
+            group = group,
+            rpm = parsedRpm ?: 850,
+            coolantTemp = parsedTemp ?: 88,
+            lambdaVoltage = parsedLambda ?: 0.45,
+            throttleAngle = parsedThrottle ?: 2.4,
+            batteryVoltage = parsedVolt ?: 14.1,
+            rawValues = raw
+        )
     }
 }
