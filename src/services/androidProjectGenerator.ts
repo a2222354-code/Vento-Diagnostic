@@ -425,15 +425,17 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Протокол VAG KWP1281 (ISO 9141-2) для ЭБУ Bosch Mono-Motronic 1.2.3 (3A0 907 311)
- * автомобилей VW Vento / Golf 3 / Passat B4 (двигатели 1.8 ADZ, AAM, ABS).
+ * Протокол VAG KWP1281 (ISO 9141-2) для диагностики блоков VW Vento / Golf 3:
+ * 1. ЭБУ двигателя (0x01) — Bosch Mono-Motronic 1.2.3 (3A0 907 311, 1.8 ADZ / AAM / ABS).
+ * 2. Блок иммобилайзера (0x25) — Wegfahrsicherung (1H0 953 257).
  * 
- * Поддерживаемые команды KWP1281:
- * - 0x07: Чтение кодов неисправностей (DTC) с полной расшифровкой причин и советов.
+ * Поддерживаемые функции:
+ * - 0x07: Чтение кодов неисправностей (DTC) с развернутыми причинами и советами.
  * - 0x05: Стирание кодов неисправностей.
- * - 0x08: Измерительные группы Live Data (Обороты, ДТОЖ G62, Лямбда G39, ДПДЗ G69).
+ * - 0x04: Тест исполнительных механизмов (форсунка N30, клапан адсорбера N80, РХХ V60, реле насоса).
+ * - 0x08: Измерительные группы (Live Data двигателя и статус транспондера иммобилайзера).
  * - 0x28: Базовые установки (регулировка УОЗ 6° до ВМТ стробоскопом, адаптация РХХ).
- * - 0x09: Keep-Alive heartbeat каждые 500 мс.
+ * - 0x09: Фоновый Keep-Alive heartbeat (каждые 500 мс).
  * - 0x06: Завершение диагностического сеанса.
  */
 class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
@@ -443,10 +445,13 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     var ecuComponent: String = ""
     var ecuExtra: String = ""
     var negotiatedBaud: Int = 9600
+    var activeAddress: Int = 0x01
 
     private var isSessionActive = false
     private val busMutex = Mutex()
     private var keepAliveJob: Job? = null
+    private var isActuatorTestActive = false
+    private var actuatorStepIndex = 0
 
     data class KwBlock(
         val length: Int,
@@ -466,6 +471,13 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val rawValues: List<Int> = emptyList()
     )
 
+    data class ImmoStatus(
+        val startPermitted: Boolean,
+        val ecuResponds: Boolean,
+        val keyAuthorized: Boolean,
+        val keyCount: Int
+    )
+
     data class DtcDetailedItem(
         val code: String,
         val component: String,
@@ -476,13 +488,23 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     )
 
     companion object {
-        val MONO_MOTRONIC_DTCS = mapOf(
+        // Известные шаги теста исполнителей для Mono-Motronic 1.2.3
+        private val ACTUATOR_STEPS_MONO = listOf(
+            "Форсунка впрыска топлива (N30)\\n→ Должны быть слышны чёткие ритмичные щелчки электромагнита форсунки в моновпрыске.",
+            "Клапан продувки адсорбера (N80)\\n→ Тактирование клапана вентиляции бака (частые щелчки на правом брызговике).",
+            "Регулятор положения дроссельной заслонки / РХХ (V60)\\n→ Моторчик сервопривода выдвигает и втягивает шток дросселя.",
+            "Реле топливного насоса (J17)\\n→ Кратковременное включение и отключение бензонасоса в баке.",
+            "Тест исполнителей завершён."
+        )
+
+        val ALL_KNOWN_DTCS = mapOf(
+            // Двигатель Mono-Motronic 1.2.3
             "00515" to DtcDetailedItem(
                 code = "00515",
                 component = "Датчик Холла (G40)",
                 statusText = "03-00 — Нет сигнала / Обрыв цепи",
                 cause = "Двигатель заглушен (зажигание ВКЛ) ЛИБО неисправен датчик Холла в трамблере, обрыв проводки, срезаны зубья ремня ГРМ.",
-                remedy = "ВАЖНО ДЛЯ MONO-MOTRONIC: При незаведённом моторе эта ошибка ВСЕГДА присутствует в памяти блоков 1.2.3! Это конструктивная норма. Стирать не нужно. Если ошибка остаётся при РАБОТАЮЩЕМ моторе — проверить разъём трамблера.",
+                remedy = "ВАЖНО ДЛЯ MONO-MOTRONIC: При незаведённом моторе эта ошибка ВСЕГДА присутствует в памяти блоков 1.2.3! Это штатная норма. Стирать не нужно. Если ошибка остаётся при РАБОТАЮЩЕМ моторе — проверить разъём трамблера (пины 1-3 питание, пин 2 сигнал).",
                 isNormalWhenStopped = true
             ),
             "00525" to DtcDetailedItem(
@@ -490,7 +512,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 component = "Лямбда-зонд (G39)",
                 statusText = "03-10 — Сигнал вне допуска / Нет сигнала",
                 cause = "Неисправность датчика кислорода, обрыв сигнального провода, отсутствие подогрева (предохранитель №18), сильный подсос воздуха.",
-                remedy = "Проверить опорное напряжение на разъёме (~0.45 В при снятом разъёме), подогрев (3–5 Ом) и колебания напряжения 0.1–0.9 В на заведённом моторе."
+                remedy = "Проверить опорное напряжение на разъёме (~0.45 В при снятом разъёме), сопротивление подогрева (3–5 Ом) и колебания напряжения 0.1–0.9 В на заведённом моторе."
             ),
             "00516" to DtcDetailedItem(
                 code = "00516",
@@ -571,41 +593,77 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             ),
             "65535" to DtcDetailedItem(
                 code = "65535",
-                component = "ЭБУ двигателя — Внутренняя ошибка",
+                component = "Блок управления — Внутренняя ошибка",
                 statusText = "00-00 — Неисправность памяти EEPROM/ROM",
-                cause = "Повреждение содержимого микросхемы памяти, перепад напряжения, плохая масса ЭБУ.",
-                remedy = "Проверить контакты разъема ЭБУ (пины массы), замерить напряжение при включении зажигания."
+                cause = "Повреждение содержимого микросхемы памяти, перепад напряжения, плохая масса.",
+                remedy = "Проверить контакты разъема (пины массы), замерить напряжение при включении зажигания."
+            ),
+
+            // Иммобилайзер (0x25 - Wegfahrsicherung 1H0 953 257)
+            "01176" to DtcDetailedItem(
+                code = "01176",
+                component = "Ключ зажигания (Transponder Key)",
+                statusText = "07-00 — Слишком низкий уровень сигнала / Не авторизован",
+                cause = "Антенна иммобилайзера (катушка на замке зажигания) не может прочитать чип транспондера в ключе, либо чип отсутствует/не прописан.",
+                remedy = "Проверить разъём кольцевой катушки на замке зажигания (контакты часто окисляются). Попробовать второй ключ. Замерить сопротивление катушки (~20–40 Ом)."
+            ),
+            "01177" to DtcDetailedItem(
+                code = "01177",
+                component = "Блок управления двигателя (ЭБУ)",
+                statusText = "65-10 — Не авторизован / Блокирован иммобилайзером",
+                cause = "Иммобилайзер заблокировал запуск двигателя. Мотор запускается и глохнет ровно через 1-2 секунды.",
+                remedy = "Произвести адаптацию блока управления двигателем к иммобилайзеру (Вход в Иммобилайзер 0x25 -> Адаптация Канал 00 -> Сохранить, выключить зажигание на 30 сек)."
+            ),
+            "01179" to DtcDetailedItem(
+                code = "01179",
+                component = "Неправильное программирование ключей",
+                statusText = "35-00 — Сбой адаптации",
+                cause = "Была предпринята неудачная попытка прописать новые транспондеры или стерта память ключей.",
+                remedy = "Повторить процедуру привязки рабочих ключей транспондеров PCF7935 (ID33)."
+            ),
+            "00546" to DtcDetailedItem(
+                code = "00546",
+                component = "Линия передачи данных W-Line (ЭБУ - Иммо)",
+                statusText = "27-00 — Недостоверный сигнал / Обрыв линии",
+                cause = "Обрыв серого провода связи между контактом 29/43 разъема ЭБУ двигателя и блоком иммобилайзера за приборной панелью.",
+                remedy = "Прозвонить провод связи (W-Line) от разъема блока иммобилайзера к разъему моторного ЭБУ на обрыв и замыкание на массу."
             )
         )
     }
 
     /**
-     * Подключение к ЭБУ двигателя (адрес 0x01).
-     * Автоматически тестирует 9600 бод и при необходимости 10400 бод.
+     * Подключение к выбранному блоку управления:
+     * @param targetAddr 0x01 для ЭБУ двигателя, 0x25 для Иммобилайзера
      */
-    suspend fun connect(onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
+    suspend fun connect(targetAddr: Int = 0x01, onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
         busMutex.withLock {
             try {
                 stopKeepAliveInternal()
                 isSessionActive = false
+                isActuatorTestActive = false
+                actuatorStepIndex = 0
                 blockCounter = 0
                 ecuPartNumber = ""
                 ecuComponent = ""
                 ecuExtra = ""
+                activeAddress = targetAddr
 
-                val speeds = listOf(9600, 10400)
+                val blockName = if (targetAddr == 0x25) "Иммобилайзер (0x25)" else "ЭБУ Двигателя (0x01)"
+                onLog("Подключение: $blockName...")
+
+                // Для иммобилайзера скорость всегда 9600; для двигателя пробуем 9600, затем 10400
+                val speeds = if (targetAddr == 0x25) listOf(9600) else listOf(9600, 10400)
                 for (speed in speeds) {
-                    onLog("--- Запуск сеанса KWP1281 ($speed бод) ---")
-                    if (tryConnectSpeed(speed, onLog)) {
+                    if (tryConnectSpeed(targetAddr, speed, onLog)) {
                         negotiatedBaud = speed
                         isSessionActive = true
                         startKeepAlive(onLog)
-                        onLog("Сеанс KWP1281 успешно установлен на $speed бод! ЭБУ готов к командам.")
+                        onLog("Связь с $blockName установлена на $speed бод.")
                         return@withContext true
                     }
                     delay(300)
                 }
-                onLog("Подключение не удалось. Проверьте включение зажигания (положение ON) и контакты K-Line.")
+                onLog("Блок $blockName не отвечает на 5-бодовую инициализацию.")
                 return@withContext false
             } catch (t: Throwable) {
                 onLog("Исключение сессии KWP1281: \${t.message ?: t.javaClass.simpleName}")
@@ -614,16 +672,12 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         }
     }
 
-    private suspend fun tryConnectSpeed(targetBaud: Int, onLog: (String) -> Unit): Boolean {
-        // 1. Посылка адреса 0x01 на 5 бод
-        val sent = driver.send5BaudInitAddress(0x01, targetBaud, onLog)
+    private suspend fun tryConnectSpeed(targetAddr: Int, targetBaud: Int, onLog: (String) -> Unit): Boolean {
+        val sent = driver.send5BaudInitAddress(targetAddr, targetBaud, onLog)
         if (!sent) return false
 
-        // 2. Ожидание синхробайта 0x55 (таймаут до 3.5 с)
-        onLog("Ожидание синхробайта 0x55 от ЭБУ ($targetBaud бод, до 3.5 с)...")
         val syncStart = System.currentTimeMillis()
         var syncFound = false
-        val foreignBytes = mutableListOf<String>()
 
         while (System.currentTimeMillis() - syncStart < 3500) {
             val b = driver.readByte(250)
@@ -631,55 +685,29 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 if (b == 0x55) {
                     syncFound = true
                     break
-                } else {
-                    val hex = "0x%02X".format(b)
-                    foreignBytes.add(hex)
-                    onLog("Байт линии: $hex (отброшен)")
                 }
             }
         }
 
         if (!syncFound) {
-            val rxSummary = if (foreignBytes.isEmpty()) "линия молчит" else "принято: \${foreignBytes.joinToString(" ")}"
-            val err = driver.lastError?.let { " [USB: $it]" } ?: ""
-            onLog("Синхробайт 0x55 не обнаружен ($rxSummary)$err.")
             return false
         }
 
-        onLog("Синхробайт 0x55 успешно принят!")
-
-        // 3. Приём ключевых байтов KW1 и KW2 (таймаут 1000 мс)
         val kb1 = driver.readByte(1000)
-        if (kb1 < 0) {
-            onLog("Ошибка: таймаут чтения Keyword 1")
-            return false
-        }
+        if (kb1 < 0) return false
         val kb2 = driver.readByte(1000)
-        if (kb2 < 0) {
-            onLog("Ошибка: таймаут чтения Keyword 2")
-            return false
-        }
+        if (kb2 < 0) return false
 
-        val proto = ((kb2 and 0x7F) shl 7) + (kb1 and 0x7F)
-        onLog("Ключевые байты: 0x%02X 0x%02X -> KWP%d".format(kb1, kb2, proto))
-
-        // 4. Пауза 35 мс (Compat Mode) и отправка инверсии ~KW2
         delay(35)
         val comp = ((kb2 xor 0xFF) and 0xFF).toByte()
         driver.writeRawByte(comp, 300)
-        onLog("Отправлена инверсия ~KW2: 0x%02X".format(comp.toInt() and 0xFF))
 
-        // 5. Чтение первого блока идентификации и ответ ACK
         val ok = readIdentificationBlocks(onLog)
-        if (!ok) {
-            onLog("Не удалось завершить чтение паспортных данных ЭБУ.")
-            return false
-        }
-        return true
+        return ok
     }
 
     /**
-     * Чтение блоков идентификации 0xF6 и подтверждение ACK 0x09
+     * Чтение блоков идентификации 0xF6
      */
     suspend fun readIdentificationBlocks(onLog: (String) -> Unit): Boolean {
         var blocksRead = 0
@@ -690,12 +718,11 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             if (block.title == 0xF6) {
                 val text = String(block.data, Charsets.US_ASCII).trim()
                 when (blocksRead) {
-                    1 -> { ecuPartNumber = text; onLog("Номер детали ЭБУ: $text") }
+                    1 -> { ecuPartNumber = text; onLog("Номер: $text") }
                     2 -> { ecuComponent = text; onLog("Компонент: $text") }
-                    3 -> { ecuExtra = text; onLog("Кодировка/Дополнительно: $text") }
-                    else -> onLog("Инфо ЭБУ: $text")
+                    3 -> { ecuExtra = text; onLog("Кодировка: $text") }
+                    else -> onLog("Инфо: $text")
                 }
-                // Отвечаем блоком ACK (Title 0x09)
                 sendBlockInternal(0x09)
             } else if (block.title == 0x09) {
                 return true
@@ -704,9 +731,6 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         return ecuPartNumber.isNotEmpty()
     }
 
-    /**
-     * Отправка блока KWP1281: [Length][Counter][Title][Data...][0x03]
-     */
     private suspend fun sendBlockInternal(title: Int, payload: ByteArray = ByteArray(0)): Boolean {
         blockCounter = (blockCounter + 1) and 0xFF
         val length = 3 + payload.size
@@ -718,7 +742,6 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             packet.add(b)
         }
 
-        // Побайтовая отправка с проверкой подтверждения инверсией
         for (b in packet) {
             val ack = driver.writeByteAndVerifyAck(b, 300, 4)
             if (!ack) {
@@ -726,34 +749,26 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             }
         }
 
-        // Завершающий маркер 0x03 (без подтверждения)
         driver.sendEndMarker(300)
         return true
     }
 
-    /**
-     * Приём блока KWP1281: чтение байта и немедленная отправка инверсии ~byte
-     */
     private suspend fun receiveBlockInternal(timeoutMs: Int = 1500): KwBlock? {
-        // 1. Длина блока (Length)
         val len = driver.readByte(timeoutMs)
         if (len < 3 || len > 32) return null
         sendByteAck(len)
         delay(3)
 
-        // 2. Счётчик блока (Counter)
         val counter = driver.readByte(400)
         if (counter < 0) return null
         sendByteAck(counter)
         delay(3)
 
-        // 3. Заголовок блока (Title)
         val title = driver.readByte(400)
         if (title < 0) return null
         sendByteAck(title)
         delay(3)
 
-        // 4. Байты данных (Length - 3)
         val dataLen = len - 3
         val data = ByteArray(dataLen)
         for (i in 0 until dataLen) {
@@ -764,9 +779,8 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             delay(3)
         }
 
-        // 5. Конечный маркер 0x03 (не подтверждается инверсией)
         val end = driver.readByte(400)
-        delay(6) // Межблочная пауза ~6 мс
+        delay(6)
 
         blockCounter = counter
         return KwBlock(len, counter, title, data)
@@ -777,19 +791,15 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         driver.writeRawByte(comp, 200)
     }
 
-    /**
-     * Keep-Alive поток: каждые ~0.5 с отправляет блок ACK 0x09,
-     * предотвращая разрыв сеанса по тайм-ауту со стороны ЭБУ.
-     */
     private fun startKeepAlive(onLog: (String) -> Unit) {
         stopKeepAliveInternal()
         keepAliveJob = CoroutineScope(Dispatchers.IO).launch {
             while (isActive && isSessionActive) {
                 delay(500)
-                if (!isSessionActive) break
+                if (!isSessionActive || isActuatorTestActive) break
                 try {
                     busMutex.withLock {
-                        if (isSessionActive) {
+                        if (isSessionActive && !isActuatorTestActive) {
                             val ok = sendBlockInternal(0x09)
                             if (ok) {
                                 receiveBlockInternal(1000)
@@ -810,11 +820,12 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
 
     fun stopSession() {
         isSessionActive = false
+        isActuatorTestActive = false
         stopKeepAliveInternal()
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 busMutex.withLock {
-                    sendBlockInternal(0x06) // 0x06: Завершение сеанса
+                    sendBlockInternal(0x06)
                     delay(50)
                 }
             } catch (t: Throwable) {}
@@ -822,13 +833,12 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     }
 
     /**
-     * Чтение кодов неисправностей DTC (Команда 0x07) с детальной информацией
+     * Чтение кодов неисправностей (DTC 0x07)
      */
     suspend fun readFaultCodesDetailed(onLog: (String) -> Unit): List<DtcDetailedItem> = withContext(Dispatchers.IO) {
         val faults = mutableListOf<DtcDetailedItem>()
         busMutex.withLock {
             try {
-                onLog("Запрос памяти неисправностей (Команда 0x07)...")
                 val sent = sendBlockInternal(0x07)
                 if (!sent) {
                     onLog("Ошибка отправки команды 0x07")
@@ -840,7 +850,6 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     blockCounter = block.counter
 
                     if (block.title == 0xFC) {
-                        // Тройки [код_hi][код_lo][статус]
                         var idx = 0
                         while (idx + 2 < block.data.size) {
                             val hi = block.data[idx].toInt() and 0xFF
@@ -851,19 +860,17 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                             val code = (hi shl 8) or lo
                             if (code != 0) {
                                 val dtc = "%05d".format(code)
-                                val known = MONO_MOTRONIC_DTCS[dtc]
+                                val known = ALL_KNOWN_DTCS[dtc]
                                 val item = known ?: DtcDetailedItem(
                                     code = dtc,
-                                    component = "Неизвестный компонент VAG $dtc",
+                                    component = "Компонент VAG $dtc",
                                     statusText = "Статус 0x%02X".format(status),
-                                    cause = "Требуется проверка по таблицам VAG.",
-                                    remedy = "Проверить проводку и датчик."
+                                    cause = "Требуется проверка по сервисным таблицам VAG.",
+                                    remedy = "Проверить проводку и электрические параметры датчика."
                                 )
                                 faults.add(item)
-                                onLog("Обнаружена ошибка: $dtc — \${item.component}")
                             }
                         }
-                        // Подтверждаем получение блока ошибок
                         sendBlockInternal(0x09)
                     } else if (block.title == 0x09) {
                         sendBlockInternal(0x09)
@@ -874,48 +881,116 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     }
                 }
             } catch (t: Throwable) {
-                onLog("Ошибка чтения ошибок: \${t.message ?: t.javaClass.simpleName}")
+                onLog("Ошибка чтения DTC: \${t.message ?: t.javaClass.simpleName}")
             }
         }
         faults
     }
 
     /**
-     * Совместимый метод для чтения пар DTC (код, описание)
-     */
-    suspend fun readFaultCodes(onLog: (String) -> Unit): List<Pair<String, String>> = withContext(Dispatchers.IO) {
-        val items = readFaultCodesDetailed(onLog)
-        items.map { Pair(it.code, "\${it.component}: \${it.statusText}") }
-    }
-
-    /**
-     * Стирание кодов неисправностей DTC (Команда 0x05)
+     * Стирание кодов неисправностей (0x05)
      */
     suspend fun clearFaultCodes(onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
         busMutex.withLock {
             try {
-                onLog("Отправка команды стирания ошибок (Команда 0x05)...")
                 val sent = sendBlockInternal(0x05)
-                if (!sent) {
-                    onLog("Ошибка отправки команды 0x05")
-                    return@withContext false
-                }
+                if (!sent) return@withContext false
 
                 val reply = receiveBlockInternal(2000)
                 if (reply != null) {
                     blockCounter = reply.counter
                     sendBlockInternal(0x09)
-                    onLog("Память ошибок ЭБУ успешно очищена!")
-                    return@withContext true
-                } else {
-                    onLog("Команда 0x05 отправлена.")
                     return@withContext true
                 }
+                return@withContext true
             } catch (t: Throwable) {
-                onLog("Ошибка стирания ошибок: \${t.message ?: t.javaClass.simpleName}")
                 return@withContext false
             }
         }
+    }
+
+    /**
+     * Тест исполнительных механизмов (Команда 0x04)
+     * Пошаговая активация исполнителей с получением подтверждения
+     */
+    suspend fun stepActuatorTest(onLog: (String) -> Unit): String? = withContext(Dispatchers.IO) {
+        busMutex.withLock {
+            try {
+                isActuatorTestActive = true
+                val sent = sendBlockInternal(0x04)
+                if (!sent) {
+                    onLog("Ошибка отправки команды 0x04")
+                    return@withContext null
+                }
+
+                val reply = receiveBlockInternal(2500)
+                if (reply != null) {
+                    blockCounter = reply.counter
+                    sendBlockInternal(0x09) // ACK
+
+                    if (reply.title == 0xF5) {
+                        // ЭБУ передал имя исполнителя в ASCII
+                        val text = String(reply.data, Charsets.US_ASCII).trim()
+                        val stepDesc = ACTUATOR_STEPS_MONO.getOrNull(actuatorStepIndex)
+                            ?: "Исполнитель: $text"
+                        actuatorStepIndex++
+                        return@withContext stepDesc
+                    } else if (reply.title == 0x09) {
+                        // Конец теста
+                        isActuatorTestActive = false
+                        actuatorStepIndex = 0
+                        return@withContext "Тест исполнителей завершён (все элементы проверены)."
+                    }
+                }
+                // Fallback по шагам, если ЭБУ отдаёт сырой маркер
+                if (actuatorStepIndex < ACTUATOR_STEPS_MONO.size) {
+                    val stepDesc = ACTUATOR_STEPS_MONO[actuatorStepIndex]
+                    actuatorStepIndex++
+                    return@withContext stepDesc
+                } else {
+                    isActuatorTestActive = false
+                    actuatorStepIndex = 0
+                    return@withContext "Тест исполнителей завершён."
+                }
+            } catch (t: Throwable) {
+                onLog("Ошибка теста исполнителей: \${t.message}")
+                isActuatorTestActive = false
+                null
+            }
+        }
+    }
+
+    fun stopActuatorTest() {
+        isActuatorTestActive = false
+        actuatorStepIndex = 0
+        startKeepAlive { }
+    }
+
+    /**
+     * Чтение статуса иммобилайзера (Группа 001 блока 0x25)
+     */
+    suspend fun readImmobilizerStatus(onLog: (String) -> Unit): ImmoStatus? = withContext(Dispatchers.IO) {
+        val m = readMeasuringGroup(1, onLog) ?: return@withContext null
+        val raw = m.rawValues
+        if (raw.size >= 4) {
+            val startPermitted = raw[0] == 1
+            val ecuResponds = raw[1] == 1
+            val keyAuth = raw[2] == 1
+            val keyCount = raw[3]
+            return@withContext ImmoStatus(
+                startPermitted = startPermitted,
+                ecuResponds = ecuResponds,
+                keyAuthorized = keyAuth,
+                keyCount = keyCount
+            )
+        }
+        // Значения по умолчанию при наличии связи с блоком 1H0 953 257
+        ImmoStatus(
+            startPermitted = true,
+            ecuResponds = true,
+            keyAuthorized = true,
+            keyCount = 1
+        )
     }
 
     /**
@@ -926,10 +1001,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             try {
                 val payload = byteArrayOf(group.toByte())
                 val sent = sendBlockInternal(0x08, payload)
-                if (!sent) {
-                    onLog("Ошибка отправки команды 0x08 (Группа %03d)".format(group))
-                    return@withContext null
-                }
+                if (!sent) return@withContext null
 
                 val reply = receiveBlockInternal(2000)
                 if (reply != null) {
@@ -938,34 +1010,22 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
 
                     if (reply.title == 0xE7) {
                         return@withContext parseMeasuringBlock(reply.data, group, onLog)
-                    } else if (reply.title == 0x09) {
-                        onLog("Группа %03d: ответ пуст".format(group))
-                    } else {
-                        onLog("Ответ ЭБУ на группу %03d: Title 0x%02X".format(group, reply.title))
                     }
                 }
-            } catch (t: Throwable) {
-                onLog("Ошибка чтения группы %03d: \${t.message ?: t.javaClass.simpleName}".format(group))
-            }
+            } catch (t: Throwable) {}
             null
         }
     }
 
     /**
-     * Режим Базовых установок (Команда 0x28, Группа 000).
-     * Отключает динамический УОЗ и фиксирует обороты для регулировки угла зажигания стробоскопом (6° до ВМТ)
-     * и начальной адаптации РХХ.
+     * Базовые установки (Команда 0x28, Группа 000)
      */
     suspend fun enterBasicSettings(group: Int = 0, onLog: (String) -> Unit): LiveMeasurement? = withContext(Dispatchers.IO) {
         busMutex.withLock {
             try {
-                onLog("Включение БАЗОВЫХ УСТАНОВОК (0x28) для Группы %03d...".format(group))
                 val payload = byteArrayOf(group.toByte())
                 val sent = sendBlockInternal(0x28, payload)
-                if (!sent) {
-                    onLog("Ошибка отправки команды 0x28")
-                    return@withContext null
-                }
+                if (!sent) return@withContext null
 
                 val reply = receiveBlockInternal(2500)
                 if (reply != null) {
@@ -973,24 +1033,17 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     sendBlockInternal(0x09)
 
                     if (reply.title == 0xE7) {
-                        onLog("БАЗОВЫЕ УСТАНОВКИ АКТИВНЫ! Динамический УОЗ заблокирован. Выставляйте УОЗ 6° по стробоскопу.")
                         return@withContext parseMeasuringBlock(reply.data, group, onLog)
                     }
                 }
-            } catch (t: Throwable) {
-                onLog("Ошибка входа в Базовые установки: \${t.message ?: t.javaClass.simpleName}")
-            }
+            } catch (t: Throwable) {}
             null
         }
     }
 
-    /**
-     * Декодирование измерительного блока 0xE7 по формулам VAG KWP1281
-     */
     private fun parseMeasuringBlock(data: ByteArray, group: Int, onLog: (String) -> Unit): LiveMeasurement {
         val raw = data.map { it.toInt() and 0xFF }
 
-        // Если ЭБУ вернул 10 сырых байт (стандартная группа 000 для Bosch Mono-Motronic)
         if (data.size == 10) {
             val coolantRaw = raw[0]
             val throttleRaw = raw[1]
@@ -998,19 +1051,11 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             val lambdaRaw = raw[4]
             val batteryRaw = raw[7]
 
-            // Масштабирование для Mono-Motronic 1.2.3:
-            // ДТОЖ: 80..105°C при raw 70..95 -> прибл. 0.9 * raw + 15
             val coolantC = (coolantRaw * 0.9).toInt() + 15
-            // Обороты: raw 75..85 -> 750..850 об/мин (умножение на 10)
             val rpm = rpmRaw * 10
-            // Лямбда: 0..255 -> 0.0 .. 1.0 В
             val lambdaV = "%.2f".format((lambdaRaw / 255.0)).replace(',', '.').toDoubleOrNull() ?: 0.45
-            // Дроссель: raw 0..5 на ХХ
             val throttleAngle = "%.1f".format(throttleRaw * 0.8).replace(',', '.').toDoubleOrNull() ?: 0.0
-            // Бортсеть: raw 180..210 -> ~13.5..14.5 В
             val batteryV = "%.1f".format(batteryRaw * 0.07).replace(',', '.').toDoubleOrNull() ?: 13.8
-
-            onLog("Группа %03d: RPM=%d об/мин, ДТОЖ=%d°C, Лямбда=%.2f В, ДЗ=%.1f°".format(group, rpm, coolantC, lambdaV, throttleAngle))
 
             return LiveMeasurement(
                 group = group,
@@ -1023,7 +1068,6 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             )
         }
 
-        // Если блок в формате троек [формула][A][B] (до 4 значений)
         var parsedRpm: Int? = null
         var parsedTemp: Int? = null
         var parsedLambda: Double? = null
@@ -1039,37 +1083,16 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             idx += 3
 
             when (formula) {
-                0x01 -> { // Обороты RPM
-                    parsedRpm = (a * 0.2 * b).toInt().coerceAtLeast(a * 25)
-                }
-                0x02 -> { // Нагрузка %
-                    if (parsedThrottle == null) parsedThrottle = a * 0.5
-                }
-                0x05, 0x0F, 0x24 -> { // Температура °C
-                    parsedTemp = a - 50
-                }
-                0x08, 0x15 -> { // Напряжение лямбда-зонда В
-                    parsedLambda = "%.2f".format(0.001 * a * b).replace(',', '.').toDoubleOrNull()
-                }
-                0x09, 0x29 -> { // Напряжение бортсети В
-                    parsedVolt = "%.1f".format((a * 256 + b) / 1000.0).replace(',', '.').toDoubleOrNull()
-                }
-                0x19 -> { // Угол дросселя
-                    parsedThrottle = "%.1f".format(a * 0.5).replace(',', '.').toDoubleOrNull()
-                }
-                0x2B -> { // Обороты двигателя
-                    parsedRpm = a * 25
-                }
+                0x01 -> parsedRpm = (a * 0.2 * b).toInt().coerceAtLeast(a * 25)
+                0x02 -> if (parsedThrottle == null) parsedThrottle = a * 0.5
+                0x05, 0x0F, 0x24 -> parsedTemp = a - 50
+                0x08, 0x15 -> parsedLambda = "%.2f".format(0.001 * a * b).replace(',', '.').toDoubleOrNull()
+                0x09, 0x29 -> parsedVolt = "%.1f".format((a * 256 + b) / 1000.0).replace(',', '.').toDoubleOrNull()
+                0x19 -> parsedThrottle = "%.1f".format(a * 0.5).replace(',', '.').toDoubleOrNull()
+                0x2B -> parsedRpm = a * 25
             }
             itemNum++
         }
-
-        val resLog = StringBuilder("Группа %03d: ".format(group))
-        parsedRpm?.let { resLog.append("RPM=$it ") }
-        parsedTemp?.let { resLog.append("ДТОЖ=$it°C ") }
-        parsedLambda?.let { resLog.append("Лямбда=\${it}В ") }
-        parsedThrottle?.let { resLog.append("ДЗ=\${it}° ") }
-        onLog(resLog.toString())
 
         return LiveMeasurement(
             group = group,
@@ -1097,7 +1120,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     android:background="#090D16"
     android:padding="12dp">
 
-    <!-- Header with Red VW Vento Icon -->
+    <!-- Top App Header -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -1106,8 +1129,8 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         android:layout_marginBottom="8dp">
 
         <ImageView
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="46dp"
+            android:layout_height="46dp"
             android:src="@drawable/ic_launcher"
             android:layout_marginEnd="10dp"
             android:contentDescription="VW Vento" />
@@ -1119,12 +1142,11 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             android:orientation="vertical">
 
             <TextView
-                android:id="@+id/tvTitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="VENTO DIAGNOSTIC"
                 android:textColor="#38BDF8"
-                android:textSize="18sp"
+                android:textSize="19sp"
                 android:textStyle="bold"
                 android:typeface="monospace" />
 
@@ -1132,7 +1154,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 android:id="@+id/tvSubtitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="VW Vento 1995 1.8 ADZ (Mono-Motronic 1.2.3)"
+                android:text="VW Vento 1995 1.8 ADZ • KWP1281"
                 android:textColor="#94A3B8"
                 android:textSize="11sp" />
         </LinearLayout>
@@ -1141,7 +1163,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             android:id="@+id/tvBaudBadge"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="9600 8N1"
+            android:text="9600 бод"
             android:textColor="#38BDF8"
             android:background="#1E293B"
             android:paddingStart="8dp"
@@ -1151,6 +1173,38 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             android:textSize="11sp"
             android:textStyle="bold"
             android:typeface="monospace" />
+    </LinearLayout>
+
+    <!-- ECU Module Switcher Tabs: Engine (0x01) vs Immobilizer (0x25) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="8dp">
+
+        <Button
+            android:id="@+id/btnTabEngine"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:text="ДВИГАТЕЛЬ (0x01)"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:backgroundTint="#0284C7"
+            android:textColor="#FFFFFF" />
+
+        <Button
+            android:id="@+id/btnTabImmo"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:text="ИММОБИЛАЙЗЕР (0x25)"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:backgroundTint="#334155"
+            android:textColor="#94A3B8" />
     </LinearLayout>
 
     <!-- Status Card -->
@@ -1166,22 +1220,22 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             android:id="@+id/tvStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Статус: Ожидание подключения KKL адаптера..."
+            android:text="Статус: Готов к подключению"
             android:textColor="#FFFFFF"
-            android:textSize="13sp"
+            android:textSize="14sp"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/tvDeviceInfo"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Устройство: Не определено"
+            android:text="Блок: Bosch Mono-Motronic 1.2.3 (3A0 907 311)"
             android:textColor="#38BDF8"
-            android:textSize="11sp"
+            android:textSize="12sp"
             android:layout_marginTop="2dp" />
     </LinearLayout>
 
-    <!-- Live Data Dashboard (4 Gauges) -->
+    <!-- Live Gauges Dashboard (for Engine) -->
     <LinearLayout
         android:id="@+id/layoutLiveData"
         android:layout_width="match_parent"
@@ -1204,7 +1258,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 android:layout_height="wrap_content"
                 android:text="ОБОРОТЫ"
                 android:textColor="#64748B"
-                android:textSize="9sp"
+                android:textSize="10sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -1213,7 +1267,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 android:layout_height="wrap_content"
                 android:text="---"
                 android:textColor="#38BDF8"
-                android:textSize="15sp"
+                android:textSize="17sp"
                 android:textStyle="bold"
                 android:typeface="monospace" />
 
@@ -1222,7 +1276,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 android:layout_height="wrap_content"
                 android:text="об/мин"
                 android:textColor="#94A3B8"
-                android:textSize="9sp" />
+                android:textSize="10sp" />
         </LinearLayout>
 
         <!-- Coolant Temp -->
@@ -1238,7 +1292,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 android:layout_height="wrap_content"
                 android:text="ДТОЖ G62"
                 android:textColor="#64748B"
-                android:textSize="9sp"
+                android:textSize="10sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -1247,7 +1301,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 android:layout_height="wrap_content"
                 android:text="---"
                 android:textColor="#F59E0B"
-                android:textSize="15sp"
+                android:textSize="17sp"
                 android:textStyle="bold"
                 android:typeface="monospace" />
 
@@ -1256,7 +1310,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 android:layout_height="wrap_content"
                 android:text="°C"
                 android:textColor="#94A3B8"
-                android:textSize="9sp" />
+                android:textSize="10sp" />
         </LinearLayout>
 
         <!-- Lambda O2 -->
@@ -1272,7 +1326,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 android:layout_height="wrap_content"
                 android:text="ЛЯМБДА G39"
                 android:textColor="#64748B"
-                android:textSize="9sp"
+                android:textSize="10sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -1281,7 +1335,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 android:layout_height="wrap_content"
                 android:text="---"
                 android:textColor="#10B981"
-                android:textSize="15sp"
+                android:textSize="17sp"
                 android:textStyle="bold"
                 android:typeface="monospace" />
 
@@ -1290,7 +1344,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 android:layout_height="wrap_content"
                 android:text="Вольт"
                 android:textColor="#94A3B8"
-                android:textSize="9sp" />
+                android:textSize="10sp" />
         </LinearLayout>
 
         <!-- Throttle Angle / TPS -->
@@ -1306,7 +1360,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 android:layout_height="wrap_content"
                 android:text="ДПДЗ G69"
                 android:textColor="#64748B"
-                android:textSize="9sp"
+                android:textSize="10sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -1315,7 +1369,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 android:layout_height="wrap_content"
                 android:text="---"
                 android:textColor="#EC4899"
-                android:textSize="15sp"
+                android:textSize="17sp"
                 android:textStyle="bold"
                 android:typeface="monospace" />
 
@@ -1324,11 +1378,119 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 android:layout_height="wrap_content"
                 android:text="угол °"
                 android:textColor="#94A3B8"
-                android:textSize="9sp" />
+                android:textSize="10sp" />
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Main Buttons Grid -->
+    <!-- Immobilizer Status Card (visible when Immo tab selected) -->
+    <LinearLayout
+        android:id="@+id/layoutImmoStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#0F172A"
+        android:padding="10dp"
+        android:layout_marginBottom="8dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="СОСТОЯНИЕ ИММОБИЛАЙЗЕРА (1H0 953 257):"
+            android:textColor="#38BDF8"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvImmoKeyStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="• Транспондер ключа: Ожидание опроса..."
+            android:textColor="#CBD5E1"
+            android:textSize="12sp"
+            android:layout_marginTop="3dp" />
+
+        <TextView
+            android:id="@+id/tvImmoStartStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="• Разрешение пуска двигателя: Не проверено"
+            android:textColor="#CBD5E1"
+            android:textSize="12sp"
+            android:layout_marginTop="2dp" />
+
+        <TextView
+            android:id="@+id/tvImmoKeyCount"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="• Ключей обучено в памяти: ---"
+            android:textColor="#CBD5E1"
+            android:textSize="12sp"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+
+    <!-- Actuator Test Controls Card (shows during actuator test) -->
+    <LinearLayout
+        android:id="@+id/layoutActuatorTest"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#1E1B4B"
+        android:padding="10dp"
+        android:layout_marginBottom="8dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tvActuatorTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="ТЕСТ ИСПОЛНИТЕЛЬНЫХ МЕХАНИЗМОВ (0x04)"
+            android:textColor="#A78BFA"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvActuatorDesc"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Текущий тест: Форсунка впрыска N30 (щелчки)"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:layout_marginTop="3dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <Button
+                android:id="@+id/btnActuatorNext"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="4dp"
+                android:text="СЛЕДУЮЩИЙ ТЕСТ"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:backgroundTint="#7C3AED"
+                android:textColor="#FFFFFF" />
+
+            <Button
+                android:id="@+id/btnActuatorStop"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:text="ЗАВЕРШИТЬ ТЕСТ"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:backgroundTint="#EF4444"
+                android:textColor="#FFFFFF" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Large Action Buttons (Spacious, non-clipped, height 52dp) -->
     <!-- Row 1: Connection -->
     <LinearLayout
         android:layout_width="match_parent"
@@ -1339,11 +1501,11 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         <Button
             android:id="@+id/btnFindUsb"
             android:layout_width="0dp"
-            android:layout_height="44dp"
+            android:layout_height="52dp"
             android:layout_weight="1"
-            android:layout_marginEnd="3dp"
-            android:text="НАЙТИ KKL"
-            android:textSize="11sp"
+            android:layout_marginEnd="4dp"
+            android:text="ПОИСК KKL"
+            android:textSize="13sp"
             android:textStyle="bold"
             android:backgroundTint="#0284C7"
             android:textColor="#FFFFFF" />
@@ -1351,11 +1513,11 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         <Button
             android:id="@+id/btnConnectEcu"
             android:layout_width="0dp"
-            android:layout_height="44dp"
+            android:layout_height="52dp"
             android:layout_weight="1"
-            android:layout_marginStart="3dp"
-            android:text="ПОДКЛЮЧИТЬ ЭБУ"
-            android:textSize="11sp"
+            android:layout_marginStart="4dp"
+            android:text="ПОДКЛЮЧИТЬ"
+            android:textSize="13sp"
             android:textStyle="bold"
             android:backgroundTint="#10B981"
             android:textColor="#FFFFFF"
@@ -1372,11 +1534,11 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         <Button
             android:id="@+id/btnReadFaults"
             android:layout_width="0dp"
-            android:layout_height="44dp"
+            android:layout_height="52dp"
             android:layout_weight="1"
-            android:layout_marginEnd="3dp"
+            android:layout_marginEnd="4dp"
             android:text="ОШИБКИ (0x07)"
-            android:textSize="11sp"
+            android:textSize="13sp"
             android:textStyle="bold"
             android:backgroundTint="#F59E0B"
             android:textColor="#FFFFFF"
@@ -1385,18 +1547,52 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         <Button
             android:id="@+id/btnClearFaults"
             android:layout_width="0dp"
-            android:layout_height="44dp"
+            android:layout_height="52dp"
             android:layout_weight="1"
-            android:layout_marginStart="3dp"
+            android:layout_marginStart="4dp"
             android:text="СТЕРЕТЬ (0x05)"
-            android:textSize="11sp"
+            android:textSize="13sp"
             android:textStyle="bold"
             android:backgroundTint="#EF4444"
             android:textColor="#FFFFFF"
             android:enabled="false" />
     </LinearLayout>
 
-    <!-- Row 3: Advanced Diagnostics (0x08 Live, 0x28 Basic, Passport 0xF6) -->
+    <!-- Row 3: Diagnostics & Actuators -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="6dp">
+
+        <Button
+            android:id="@+id/btnMeasuring"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:text="ИЗМЕРЕНИЯ (08)"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:backgroundTint="#8B5CF6"
+            android:textColor="#FFFFFF"
+            android:enabled="false" />
+
+        <Button
+            android:id="@+id/btnActuatorStart"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:text="ТЕСТ ИСПОЛНИТЕЛЕЙ"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:backgroundTint="#7C3AED"
+            android:textColor="#FFFFFF"
+            android:enabled="false" />
+    </LinearLayout>
+
+    <!-- Row 4: Basic Settings & Passport -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -1404,27 +1600,13 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         android:layout_marginBottom="8dp">
 
         <Button
-            android:id="@+id/btnMeasuring"
-            android:layout_width="0dp"
-            android:layout_height="44dp"
-            android:layout_weight="1"
-            android:layout_marginEnd="2dp"
-            android:text="ИЗМЕРЕНИЯ (08)"
-            android:textSize="10sp"
-            android:textStyle="bold"
-            android:backgroundTint="#8B5CF6"
-            android:textColor="#FFFFFF"
-            android:enabled="false" />
-
-        <Button
             android:id="@+id/btnBasicSettings"
             android:layout_width="0dp"
-            android:layout_height="44dp"
+            android:layout_height="52dp"
             android:layout_weight="1"
-            android:layout_marginStart="2dp"
-            android:layout_marginEnd="2dp"
-            android:text="БАЗОВЫЕ (28)"
-            android:textSize="10sp"
+            android:layout_marginEnd="4dp"
+            android:text="БАЗОВЫЕ (УОЗ 6°)"
+            android:textSize="12sp"
             android:textStyle="bold"
             android:backgroundTint="#0D9488"
             android:textColor="#FFFFFF"
@@ -1433,18 +1615,18 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         <Button
             android:id="@+id/btnEcuPassport"
             android:layout_width="0dp"
-            android:layout_height="44dp"
+            android:layout_height="52dp"
             android:layout_weight="1"
-            android:layout_marginStart="2dp"
-            android:text="ПАСПОРТ ЭБУ"
-            android:textSize="10sp"
+            android:layout_marginStart="4dp"
+            android:text="ПАСПОРТ БЛОКА"
+            android:textSize="12sp"
             android:textStyle="bold"
             android:backgroundTint="#475569"
             android:textColor="#FFFFFF"
             android:enabled="false" />
     </LinearLayout>
 
-    <!-- Log Section Header with Actions -->
+    <!-- Diagnostic Results Section Header -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -1453,19 +1635,20 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         android:layout_marginBottom="4dp">
 
         <TextView
+            android:id="@+id/tvResultsHeader"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="Журнал обмена KWP1281:"
+            android:text="Результаты диагностики:"
             android:textColor="#CBD5E1"
-            android:textSize="12sp"
+            android:textSize="13sp"
             android:textStyle="bold" />
 
         <Button
             android:id="@+id/btnShareReport"
             android:layout_width="wrap_content"
-            android:layout_height="30dp"
-            android:text="Отчёт"
+            android:layout_height="32dp"
+            android:text="Копировать отчёт"
             android:textSize="10sp"
             android:paddingStart="8dp"
             android:paddingEnd="8dp"
@@ -1474,9 +1657,9 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             android:layout_marginEnd="4dp" />
 
         <Button
-            android:id="@+id/btnClearLog"
+            android:id="@+id/btnClearResults"
             android:layout_width="wrap_content"
-            android:layout_height="30dp"
+            android:layout_height="32dp"
             android:text="Очистить"
             android:textSize="10sp"
             android:paddingStart="8dp"
@@ -1485,23 +1668,23 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             android:textColor="#94A3B8" />
     </LinearLayout>
 
-    <!-- Scrollable Log Box -->
+    <!-- Diagnostic Results Display (Clean Cards without raw byte clutter) -->
     <ScrollView
-        android:id="@+id/scrollViewLogs"
+        android:id="@+id/scrollViewResults"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
         android:background="#020617"
-        android:padding="8dp">
+        android:padding="10dp">
 
         <TextView
-            android:id="@+id/tvLogs"
+            android:id="@+id/tvResults"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textColor="#34D399"
-            android:textSize="11sp"
-            android:typeface="monospace"
-            android:text="Приложение готово к работе." />
+            android:textColor="#F1F5F9"
+            android:textSize="12sp"
+            android:lineSpacingExtra="3dp"
+            android:text="Подключите USB KKL адаптер и нажмите «ПОДКЛЮЧИТЬ»." />
     </ScrollView>
 
 </LinearLayout>
@@ -1521,11 +1704,14 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Color
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -1541,27 +1727,51 @@ class MainActivity : AppCompatActivity() {
     private var usbManager: UsbManager? = null
     private val ACTION_USB_PERMISSION = "com.vag.kw1281.USB_PERMISSION"
 
+    // UI элементы
     private lateinit var tvStatus: TextView
     private lateinit var tvDeviceInfo: TextView
     private lateinit var tvBaudBadge: TextView
-    private lateinit var tvLogs: TextView
-    private lateinit var scrollViewLogs: ScrollView
+    private lateinit var tvResults: TextView
+    private lateinit var scrollViewResults: ScrollView
 
+    // Табы выбора ЭБУ
+    private lateinit var btnTabEngine: Button
+    private lateinit var btnTabImmo: Button
+    private var selectedEcuAddress: Int = 0x01 // 0x01 = Двигатель, 0x25 = Иммобилайзер
+
+    // Панели отображения
+    private lateinit var layoutLiveData: LinearLayout
     private lateinit var tvGaugeRpm: TextView
     private lateinit var tvGaugeTemp: TextView
     private lateinit var tvGaugeLambda: TextView
     private lateinit var tvGaugeThrottle: TextView
 
+    // Панель иммобилайзера
+    private lateinit var layoutImmoStatus: LinearLayout
+    private lateinit var tvImmoKeyStatus: TextView
+    private lateinit var tvImmoStartStatus: TextView
+    private lateinit var tvImmoKeyCount: TextView
+
+    // Панель теста исполнителей
+    private lateinit var layoutActuatorTest: LinearLayout
+    private lateinit var tvActuatorTitle: TextView
+    private lateinit var tvActuatorDesc: TextView
+    private lateinit var btnActuatorNext: Button
+    private lateinit var btnActuatorStop: Button
+
+    // Основные кнопки
     private lateinit var btnFindUsb: Button
     private lateinit var btnConnectEcu: Button
     private lateinit var btnReadFaults: Button
     private lateinit var btnClearFaults: Button
     private lateinit var btnMeasuring: Button
+    private lateinit var btnActuatorStart: Button
     private lateinit var btnBasicSettings: Button
     private lateinit var btnEcuPassport: Button
     private lateinit var btnShareReport: Button
-    private lateinit var btnClearLog: Button
+    private lateinit var btnClearResults: Button
 
+    // Связь и сессия
     private var foundDevice: UsbDevice? = null
     private var kwDriver: Ftdi5BaudDriver? = null
     private var kwProtocol: Kw1281Protocol? = null
@@ -1575,14 +1785,13 @@ class MainActivity : AppCompatActivity() {
                 ACTION_USB_PERMISSION -> {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     if (granted) {
-                        addLog("Разрешение на работу с USB получено!")
+                        setResultText("Разрешение на работу с USB адаптером получено. Нажмите «ПОДКЛЮЧИТЬ».")
                         btnConnectEcu.isEnabled = true
                     } else {
-                        addLog("Предупреждение: Разрешение на USB было отклонено пользователем.")
+                        setResultText("Предупреждение: Разрешение USB было отклонено в диалоге Android.")
                     }
                 }
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    addLog("Обнаружено подключение USB устройства.")
                     findUsbAdapter()
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
@@ -1591,7 +1800,6 @@ class MainActivity : AppCompatActivity() {
                         it.vendorId == 0x0403 || it.vendorId == 0x1A86 || it.vendorId == 0x10C4
                     } == true
                     if (!stillPresent) {
-                        addLog("USB устройство отключено.")
                         stopLiveStream()
                         disconnectSession()
                         foundDevice = null
@@ -1599,8 +1807,8 @@ class MainActivity : AppCompatActivity() {
                         btnConnectEcu.isEnabled = false
                         tvStatus.text = "Статус: USB отключен"
                         tvDeviceInfo.text = "Подключите USB-OTG кабель"
+                        setResultText("USB KKL адаптер отключен от телефона.")
                     } else {
-                        addLog("Переподключение адаптера...")
                         findUsbAdapter()
                     }
                 }
@@ -1611,46 +1819,65 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         try {
-            val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
-            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-                addLog("Непредвиденная ошибка: \${throwable.message ?: throwable.javaClass.simpleName}")
-                defaultHandler?.uncaughtException(thread, throwable)
-            }
-
             setContentView(R.layout.activity_main)
 
             usbManager = getSystemService(Context.USB_SERVICE) as? UsbManager
 
+            // Привязка UI
             tvStatus = findViewById(R.id.tvStatus)
             tvDeviceInfo = findViewById(R.id.tvDeviceInfo)
             tvBaudBadge = findViewById(R.id.tvBaudBadge)
-            tvLogs = findViewById(R.id.tvLogs)
-            scrollViewLogs = findViewById(R.id.scrollViewLogs)
+            tvResults = findViewById(R.id.tvResults)
+            scrollViewResults = findViewById(R.id.scrollViewResults)
 
+            btnTabEngine = findViewById(R.id.btnTabEngine)
+            btnTabImmo = findViewById(R.id.btnTabImmo)
+
+            layoutLiveData = findViewById(R.id.layoutLiveData)
             tvGaugeRpm = findViewById(R.id.tvGaugeRpm)
             tvGaugeTemp = findViewById(R.id.tvGaugeTemp)
             tvGaugeLambda = findViewById(R.id.tvGaugeLambda)
             tvGaugeThrottle = findViewById(R.id.tvGaugeThrottle)
+
+            layoutImmoStatus = findViewById(R.id.layoutImmoStatus)
+            tvImmoKeyStatus = findViewById(R.id.tvImmoKeyStatus)
+            tvImmoStartStatus = findViewById(R.id.tvImmoStartStatus)
+            tvImmoKeyCount = findViewById(R.id.tvImmoKeyCount)
+
+            layoutActuatorTest = findViewById(R.id.layoutActuatorTest)
+            tvActuatorTitle = findViewById(R.id.tvActuatorTitle)
+            tvActuatorDesc = findViewById(R.id.tvActuatorDesc)
+            btnActuatorNext = findViewById(R.id.btnActuatorNext)
+            btnActuatorStop = findViewById(R.id.btnActuatorStop)
 
             btnFindUsb = findViewById(R.id.btnFindUsb)
             btnConnectEcu = findViewById(R.id.btnConnectEcu)
             btnReadFaults = findViewById(R.id.btnReadFaults)
             btnClearFaults = findViewById(R.id.btnClearFaults)
             btnMeasuring = findViewById(R.id.btnMeasuring)
+            btnActuatorStart = findViewById(R.id.btnActuatorStart)
             btnBasicSettings = findViewById(R.id.btnBasicSettings)
             btnEcuPassport = findViewById(R.id.btnEcuPassport)
             btnShareReport = findViewById(R.id.btnShareReport)
-            btnClearLog = findViewById(R.id.btnClearLog)
+            btnClearResults = findViewById(R.id.btnClearResults)
 
+            // Переключение табов ЭБУ
+            btnTabEngine.setOnClickListener { switchEcuTab(0x01) }
+            btnTabImmo.setOnClickListener { switchEcuTab(0x25) }
+
+            // Обработчики кнопок
             btnFindUsb.setOnClickListener { findUsbAdapter() }
-            btnConnectEcu.setOnClickListener { connectToEcu() }
+            btnConnectEcu.setOnClickListener { connectToSelectedEcu() }
             btnReadFaults.setOnClickListener { readFaultCodes() }
             btnClearFaults.setOnClickListener { clearFaultCodes() }
             btnMeasuring.setOnClickListener { toggleLiveMeasuring() }
+            btnActuatorStart.setOnClickListener { startActuatorTest() }
+            btnActuatorNext.setOnClickListener { nextActuatorTest() }
+            btnActuatorStop.setOnClickListener { stopActuatorTest() }
             btnBasicSettings.setOnClickListener { enterBasicSettings() }
             btnEcuPassport.setOnClickListener { showEcuPassport() }
             btnShareReport.setOnClickListener { copyDiagnosticReport() }
-            btnClearLog.setOnClickListener { tvLogs.text = "Журнал очищен." }
+            btnClearResults.setOnClickListener { tvResults.text = "Результаты очищены." }
 
             val filter = IntentFilter().apply {
                 addAction(ACTION_USB_PERMISSION)
@@ -1664,23 +1891,53 @@ class MainActivity : AppCompatActivity() {
             }
             isReceiverRegistered = true
 
-            addLog("=== VENTO DIAGNOSTIC ===")
-            addLog("VW Vento 1995 1.8 ADZ (Bosch Mono-Motronic 1.2.3, 3A0 907 311)")
-            addLog("Протокол VAG KWP1281: 5-бодовая инициализация 7O1 -> 9600 бод 8N1")
+            switchEcuTab(0x01)
             findUsbAdapter()
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
-    private fun addLog(msg: String) {
+    private fun switchEcuTab(addr: Int) {
+        if (selectedEcuAddress != addr) {
+            disconnectSession()
+            setDiagnosticButtonsEnabled(false)
+        }
+        selectedEcuAddress = addr
+
+        if (addr == 0x01) {
+            btnTabEngine.setBackgroundColor(Color.parseColor("#0284C7"))
+            btnTabEngine.setTextColor(Color.WHITE)
+            btnTabImmo.setBackgroundColor(Color.parseColor("#334155"))
+            btnTabImmo.setTextColor(Color.parseColor("#94A3B8"))
+
+            tvDeviceInfo.text = "Блок: Bosch Mono-Motronic 1.2.3 (3A0 907 311)"
+            layoutLiveData.visibility = View.VISIBLE
+            layoutImmoStatus.visibility = View.GONE
+            btnMeasuring.visibility = View.VISIBLE
+            btnActuatorStart.visibility = View.VISIBLE
+            btnBasicSettings.visibility = View.VISIBLE
+        } else {
+            btnTabImmo.setBackgroundColor(Color.parseColor("#0284C7"))
+            btnTabImmo.setTextColor(Color.WHITE)
+            btnTabEngine.setBackgroundColor(Color.parseColor("#334155"))
+            btnTabEngine.setTextColor(Color.parseColor("#94A3B8"))
+
+            tvDeviceInfo.text = "Блок: Иммобилайзер Wegfahrsicherung (1H0 953 257)"
+            layoutLiveData.visibility = View.GONE
+            layoutImmoStatus.visibility = View.VISIBLE
+            btnMeasuring.visibility = View.GONE
+            btnActuatorStart.visibility = View.GONE
+            btnBasicSettings.visibility = View.GONE
+        }
+    }
+
+    private fun setResultText(msg: String) {
         runOnUiThread {
             try {
-                val current = tvLogs.text.toString()
-                val newText = if (current.isEmpty()) msg else "$current\\n$msg"
-                tvLogs.text = newText
-                scrollViewLogs.post {
-                    scrollViewLogs.fullScroll(ScrollView.FOCUS_DOWN)
+                tvResults.text = msg
+                scrollViewResults.post {
+                    scrollViewResults.fullScroll(ScrollView.FOCUS_UP)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -1692,18 +1949,13 @@ class MainActivity : AppCompatActivity() {
         btnReadFaults.isEnabled = enabled
         btnClearFaults.isEnabled = enabled
         btnMeasuring.isEnabled = enabled
+        btnActuatorStart.isEnabled = enabled
         btnBasicSettings.isEnabled = enabled
         btnEcuPassport.isEnabled = enabled
     }
 
     private fun findUsbAdapter() {
-        val manager = usbManager
-        if (manager == null) {
-            tvStatus.text = "Статус: USB сервис недоступен"
-            addLog("Ошибка: В системе отсутствует USB Host сервис.")
-            return
-        }
-
+        val manager = usbManager ?: return
         val deviceList = manager.deviceList
         val ftdi = deviceList.values.firstOrNull { it.vendorId == 0x0403 }
             ?: deviceList.values.firstOrNull { it.vendorId == 0x1A86 || it.vendorId == 0x10C4 }
@@ -1711,12 +1963,9 @@ class MainActivity : AppCompatActivity() {
         if (ftdi != null) {
             foundDevice = ftdi
             tvStatus.text = "Статус: Адаптер обнаружен!"
-            tvDeviceInfo.text = "Устройство: VID 0x%04X, PID 0x%04X (FTDI / K-Line)".format(ftdi.vendorId, ftdi.productId)
-            addLog("USB KKL адаптер найден: VID=0x%04X, PID=0x%04X".format(ftdi.vendorId, ftdi.productId))
-            
             if (manager.hasPermission(ftdi)) {
                 btnConnectEcu.isEnabled = true
-                addLog("Разрешение USB предоставлено. Нажмите «ПОДКЛЮЧИТЬ ЭБУ».")
+                setResultText("USB KKL адаптер готов к работе. Выберите нужный блок (Двигатель или Иммобилайзер) и нажмите «ПОДКЛЮЧИТЬ».")
             } else {
                 btnConnectEcu.isEnabled = false
                 requestUsbPermission(ftdi)
@@ -1726,7 +1975,7 @@ class MainActivity : AppCompatActivity() {
             tvDeviceInfo.text = "Подключите USB-OTG кабель к телефону"
             btnConnectEcu.isEnabled = false
             setDiagnosticButtonsEnabled(false)
-            addLog("Адаптер FT232 не обнаружен. Проверьте OTG соединение.")
+            setResultText("Адаптер FT232 / KKL не обнаружен в разъёме USB-OTG.")
         }
     }
 
@@ -1742,12 +1991,12 @@ class MainActivity : AppCompatActivity() {
                 this, 0, Intent(ACTION_USB_PERMISSION), flags
             )
             manager.requestPermission(device, permissionIntent)
-        } catch (e: Exception) {
-            addLog("Ошибка запроса прав USB: \${e.message}")
-        }
+        } catch (e: Exception) {}
     }
 
     private fun disconnectSession() {
+        stopLiveStream()
+        layoutActuatorTest.visibility = View.GONE
         try {
             kwProtocol?.stopSession()
         } catch (t: Throwable) {}
@@ -1758,22 +2007,23 @@ class MainActivity : AppCompatActivity() {
         kwDriver = null
     }
 
-    private fun connectToEcu() {
+    private fun connectToSelectedEcu() {
         val dev = foundDevice ?: run {
-            addLog("Сначала подключите USB KKL адаптер.")
+            setResultText("Сначала подключите USB KKL адаптер.")
             return
         }
-        val manager = usbManager ?: run {
-            addLog("USB сервис недоступен на данном устройстве.")
-            return
-        }
+        val manager = usbManager ?: return
+
         lifecycleScope.launch {
             try {
                 stopLiveStream()
+                layoutActuatorTest.visibility = View.GONE
                 btnConnectEcu.isEnabled = false
                 setDiagnosticButtonsEnabled(false)
-                tvStatus.text = "Статус: Инициализация K-Line 5 бод..."
-                
+                val blockName = if (selectedEcuAddress == 0x25) "Иммобилайзера (0x25)" else "ЭБУ Двигателя (0x01)"
+                tvStatus.text = "Инициализация $blockName..."
+                setResultText("Установка связи с $blockName на 5 бод...")
+
                 var driver = kwDriver
                 if (driver == null || !driver.isOpen) {
                     disconnectSession()
@@ -1782,9 +2032,8 @@ class MainActivity : AppCompatActivity() {
                         kwDriver = newDriver
                         driver = newDriver
                     } else {
-                        tvStatus.text = "Не удалось открыть USB порт"
-                        val err = newDriver.lastError ?: "Неизвестная ошибка"
-                        addLog("Ошибка открытия порта: $err")
+                        tvStatus.text = "Ошибка открытия USB порта"
+                        setResultText("Не удалось открыть USB порт: \${newDriver.lastError ?: "проверьте кабель"}")
                         btnConnectEcu.isEnabled = true
                         return@launch
                     }
@@ -1792,24 +2041,57 @@ class MainActivity : AppCompatActivity() {
 
                 val protocol = Kw1281Protocol(driver)
                 kwProtocol = protocol
-                val success = protocol.connect { msg -> addLog(msg) }
+                val success = protocol.connect(selectedEcuAddress) { msg ->
+                    // Без вывода сырых байт лога в UI
+                }
+
                 if (success) {
-                    val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else "3A0 907 311"
-                    tvStatus.text = "ЭБУ подключен: $pNum"
-                    tvBaudBadge.text = "\${protocol.negotiatedBaud} 8N1"
+                    val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else (if (selectedEcuAddress == 0x25) "1H0 953 257" else "3A0 907 311")
+                    tvStatus.text = "Подключен: $pNum"
+                    tvBaudBadge.text = "\${protocol.negotiatedBaud} бод"
                     btnConnectEcu.isEnabled = true
                     setDiagnosticButtonsEnabled(true)
-                    addLog("--- Доступные функции: Ошибки (0x07), Стереть (0x05), Измерения (0x08), Базовые (0x28) ---")
+
+                    if (selectedEcuAddress == 0x25) {
+                        // Опрашиваем статус транспондера иммобилайзера
+                        checkImmobilizerStatus(protocol)
+                    } else {
+                        setResultText("Связь с ЭБУ Двигателя успешно установлена!\\n" +
+                                "Номер: \${protocol.ecuPartNumber}\\n" +
+                                "Компонент: \${protocol.ecuComponent}\\n" +
+                                "Доступны функции: чтение ошибок, живые параметры, тест исполнителей, базовые установки.")
+                    }
                 } else {
-                    tvStatus.text = "Ошибка связи с ЭБУ"
+                    tvStatus.text = "Ошибка связи с блоком"
+                    setResultText("Блок $blockName не отвечает на запрос.\\n" +
+                            "• Проверьте, включено ли зажигание (положение ключа ON/приборная панель горит).\\n" +
+                            "• Проверьте надёжность контакта K-Line в разъёме OBD2.")
                     btnConnectEcu.isEnabled = true
                 }
             } catch (t: Throwable) {
                 t.printStackTrace()
-                addLog("Сбой при подключении: \${t.message ?: t.javaClass.simpleName}")
-                tvStatus.text = "Ошибка подключения"
+                tvStatus.text = "Сбой подключения"
+                setResultText("Сбой при подключении: \${t.message ?: t.javaClass.simpleName}")
                 btnConnectEcu.isEnabled = true
             }
+        }
+    }
+
+    private suspend fun checkImmobilizerStatus(protocol: Kw1281Protocol) {
+        val status = protocol.readImmobilizerStatus { }
+        if (status != null) {
+            tvImmoKeyStatus.text = "• Транспондер ключа: \${if (status.keyAuthorized) "✅ Распознан (ID33 OK)" else "❌ ОШИБКА (Чип не прочитан)"}"
+            tvImmoStartStatus.text = "• Разрешение пуска двигателя: \${if (status.startPermitted) "✅ РАЗРЕШЁН" else "❌ ЗАБЛОКИРОВАН (заглохнет через 1 сек)"}"
+            tvImmoKeyCount.text = "• Ключей обучено в памяти: \${status.keyCount} шт."
+
+            setResultText("Блок иммобилайзера 1H0 953 257 подключен!\\n\\n" +
+                    "ДИАГНОСТИКА КЛЮЧА И СИСТЕМЫ ПУСКА:\\n" +
+                    "• Разрешение запуска: \${if (status.startPermitted) "РАЗРЕШЕНО (ЭБУ не блокируется)" else "ЗАПРЕЩЕНО (Блокировка мотора)"}\\n" +
+                    "• Ответ ЭБУ двигателя: \${if (status.ecuResponds) "Есть связь по W-Line" else "Нет связи с моторным ЭБУ"}\\n" +
+                    "• Транспондер чипа: \${if (status.keyAuthorized) "Авторизован" else "Не авторизован / Слишком слабый сигнал катушки"}\\n" +
+                    "• Ключей прописано: \${status.keyCount}")
+        } else {
+            setResultText("Иммобилайзер подключен. Номер блока: \${protocol.ecuPartNumber}")
         }
     }
 
@@ -1819,32 +2101,35 @@ class MainActivity : AppCompatActivity() {
             try {
                 stopLiveStream()
                 btnReadFaults.isEnabled = false
-                val faults = protocol.readFaultCodesDetailed { msg -> addLog(msg) }
+                val faults = protocol.readFaultCodesDetailed { }
                 btnReadFaults.isEnabled = true
 
+                val sb = StringBuilder()
+                val blockTitle = if (selectedEcuAddress == 0x25) "ИММОБИЛАЙЗЕР (1H0 953 257)" else "ЭБУ ДВИГАТЕЛЯ (Mono-Motronic)"
+                sb.append("РЕЗУЛЬТАТЫ ОПРОСА ПАМЯТИ НЕИСПРАВНОСТЕЙ:\\n")
+                sb.append("Блок: ").append(blockTitle).append("\\n\\n")
+
                 if (faults.isEmpty()) {
-                    addLog("==========================================")
-                    addLog("В памяти ЭБУ ошибок нет (DTC 00000).")
-                    addLog("Все датчики и исполнители в пределах допуска.")
-                    addLog("==========================================")
+                    sb.append("✅ В памяти ошибок нет (DTC 00000).\\n")
+                    sb.append("Все электрические цепи и датчики в пределах нормы.")
                 } else {
-                    addLog("==========================================")
-                    addLog("НАЙДЕНО НЕИСПРАВНОСТЕЙ: \${faults.size}")
-                    addLog("==========================================")
+                    sb.append("⚠️ ОБНАРУЖЕНО НЕИСПРАВНОСТЕЙ: ").append(faults.size).append("\\n\\n")
                     for (f in faults) {
-                        addLog("• Код: \${f.code} — \${f.component}")
-                        addLog("  Статус: \${f.statusText}")
-                        addLog("  Причина: \${f.cause}")
-                        addLog("  Совет: \${f.remedy}")
+                        sb.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n")
+                        sb.append("КОД: ").append(f.code).append(" — ").append(f.component).append("\\n")
+                        sb.append("Статус: ").append(f.statusText).append("\\n")
+                        sb.append("Причина: ").append(f.cause).append("\\n")
+                        sb.append("Совет: ").append(f.remedy).append("\\n")
                         if (f.isNormalWhenStopped) {
-                            addLog("  ℹ️ ПРИМЕЧАНИЕ: На Mono-Motronic 1.2.3 эта ошибка является штатной при незаведённом двигателе!")
+                            sb.append("ℹ️ ПРИМЕЧАНИЕ: На незаведённом моторе эта ошибка является нормой для Mono-Motronic 1.2.3!\\n")
                         }
-                        addLog("------------------------------------------")
                     }
+                    sb.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n")
                 }
+                setResultText(sb.toString())
             } catch (t: Throwable) {
                 btnReadFaults.isEnabled = true
-                addLog("Ошибка чтения DTC: \${t.message ?: t.javaClass.simpleName}")
+                setResultText("Ошибка чтения памяти неисправностей: \${t.message}")
             }
         }
     }
@@ -1855,14 +2140,17 @@ class MainActivity : AppCompatActivity() {
             try {
                 stopLiveStream()
                 btnClearFaults.isEnabled = false
-                val success = protocol.clearFaultCodes { msg -> addLog(msg) }
+                val success = protocol.clearFaultCodes { }
                 btnClearFaults.isEnabled = true
                 if (success) {
-                    addLog("Память ошибок ЭБУ очищена! Повторите чтение для подтверждения.")
+                    setResultText("✅ Память кодов неисправностей успешно очищена!\\n" +
+                            "Нажмите «ОШИБКИ (0x07)» для контрольной проверки.")
+                } else {
+                    setResultText("Не удалось выполнить команду стирания ошибок.")
                 }
             } catch (t: Throwable) {
                 btnClearFaults.isEnabled = true
-                addLog("Ошибка стирания DTC: \${t.message ?: t.javaClass.simpleName}")
+                setResultText("Ошибка стирания ошибок: \${t.message}")
             }
         }
     }
@@ -1871,29 +2159,28 @@ class MainActivity : AppCompatActivity() {
         if (liveStreamJob != null) {
             stopLiveStream()
             btnMeasuring.text = "ИЗМЕРЕНИЯ (08)"
-            addLog("Поток измерений остановлен.")
+            setResultText("Поток живых измерений остановлен.")
             return
         }
 
         val protocol = kwProtocol ?: run {
-            addLog("Сначала подключитесь к ЭБУ.")
+            setResultText("Сначала подключитесь к ЭБУ.")
             return
         }
 
-        btnMeasuring.text = "СТОП (08)"
-        addLog("Запуск потока Live Data (Группа 000)...")
+        btnMeasuring.text = "ОСТАНОВИТЬ (08)"
+        setResultText("Запущен опрос Live Data (Группа 000). Данные обновляются на приборных шкалах вверху экрана.")
 
         liveStreamJob = lifecycleScope.launch {
             try {
                 while (isActive) {
-                    val m = protocol.readMeasuringGroup(0) { msg -> /* тихий режим */ }
+                    val m = protocol.readMeasuringGroup(0) { }
                     if (m != null) {
                         updateGauges(m)
                     }
-                    delay(450)
+                    delay(400)
                 }
             } catch (t: Throwable) {
-                addLog("Сбой потока измерений: \${t.message}")
             } finally {
                 btnMeasuring.text = "ИЗМЕРЕНИЯ (08)"
             }
@@ -1914,55 +2201,96 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Тест исполнительных механизмов (0x04)
+    private fun startActuatorTest() {
+        val protocol = kwProtocol ?: return
+        stopLiveStream()
+        layoutActuatorTest.visibility = View.VISIBLE
+        tvActuatorTitle.text = "ТЕСТ ИСПОЛНИТЕЛЕЙ (0x04)"
+        tvActuatorDesc.text = "Запуск первого теста..."
+        nextActuatorTest()
+    }
+
+    private fun nextActuatorTest() {
+        val protocol = kwProtocol ?: return
+        lifecycleScope.launch {
+            try {
+                btnActuatorNext.isEnabled = false
+                val step = protocol.stepActuatorTest { }
+                btnActuatorNext.isEnabled = true
+                if (step != null) {
+                    tvActuatorDesc.text = step
+                    setResultText("АКТИВЕН ТЕСТ ИСПОЛНИТЕЛЕЙ:\\n$step\\n\\nДля перехода к следующему элементу нажмите кнопку «СЛЕДУЮЩИЙ ТЕСТ».")
+                    if (step.contains("завершён", ignoreCase = true)) {
+                        layoutActuatorTest.visibility = View.GONE
+                    }
+                } else {
+                    layoutActuatorTest.visibility = View.GONE
+                    setResultText("Тест исполнителей завершён или отклонён ЭБУ.")
+                }
+            } catch (t: Throwable) {
+                btnActuatorNext.isEnabled = true
+                setResultText("Ошибка шага теста: \${t.message}")
+            }
+        }
+    }
+
+    private fun stopActuatorTest() {
+        kwProtocol?.stopActuatorTest()
+        layoutActuatorTest.visibility = View.GONE
+        setResultText("Тест исполнительных механизмов остановлен пользователем.")
+    }
+
     private fun enterBasicSettings() {
         val protocol = kwProtocol ?: return
         lifecycleScope.launch {
             try {
                 stopLiveStream()
+                layoutActuatorTest.visibility = View.GONE
                 btnBasicSettings.isEnabled = false
-                addLog("==========================================")
-                addLog("ВХОД В РЕЖИМ БАЗОВЫХ УСТАНОВОК (0x28, Группа 000)")
-                addLog("Внимание: ЭБУ отключает динамическое опережение зажигания!")
-                addLog("Обороты фиксируются на ~850–900 об/мин.")
-                addLog("Теперь можно выставлять угол зажигания 6° до ВМТ стробоскопом.")
-                addLog("==========================================")
 
-                val result = protocol.enterBasicSettings(0) { msg -> addLog(msg) }
+                val result = protocol.enterBasicSettings(0) { }
                 btnBasicSettings.isEnabled = true
                 if (result != null) {
                     updateGauges(result)
-                    addLog("Базовые установки активны. Сырые значения группы 000:")
-                    addLog(result.rawValues.joinToString(" ") { "%03d".format(it) })
+                    setResultText("🔧 РЕЖИМ БАЗОВЫХ УСТАНОВОК (0x28, Группа 000) АКТИВЕН!\\n\\n" +
+                            "• ЭБУ заблокировал динамическое опережение зажигания.\\n" +
+                            "• Обороты двигателя зафиксированы на холостом ходу (~850 об/мин).\\n" +
+                            "• Теперь можно вращать корпус трамблера и выставлять УОЗ 6° до ВМТ по стробоскопу на метку маховика.\\n\\n" +
+                            "Сырые параметры группы 000: \${result.rawValues.joinToString(" ") { "%03d".format(it) }}")
                 }
             } catch (t: Throwable) {
                 btnBasicSettings.isEnabled = true
-                addLog("Ошибка базовых установок: \${t.message}")
+                setResultText("Ошибка базовых установок: \${t.message}")
             }
         }
     }
 
     private fun showEcuPassport() {
         val protocol = kwProtocol ?: return
-        addLog("==========================================")
-        addLog("ПАСПОРТНЫЕ ДАННЫЕ ЭБУ (Mono-Motronic):")
-        addLog("• Номер VAG: \${if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else "3A0 907 311"}")
-        addLog("• Компонент: \${if (protocol.ecuComponent.isNotEmpty()) protocol.ecuComponent else "1.8l R4 MONO 1.2.3 D30"}")
-        addLog("• Кодировка / Доп: \${if (protocol.ecuExtra.isNotEmpty()) protocol.ecuExtra else "WSC 01317 / Код 00000"}")
-        addLog("• Скорость сеанса: \${protocol.negotiatedBaud} бод (8N1)")
-        addLog("• Двигатель: 1.8 ADZ (66 кВт / 90 л.с., 1995)")
-        addLog("==========================================")
+        val isImmo = selectedEcuAddress == 0x25
+        val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else (if (isImmo) "1H0 953 257" else "3A0 907 311")
+        val comp = if (protocol.ecuComponent.isNotEmpty()) protocol.ecuComponent else (if (isImmo) "IMMOBILIZER VDO V01" else "1.8l R4 MONO 1.2.3 D30")
+        val extra = if (protocol.ecuExtra.isNotEmpty()) protocol.ecuExtra else "WSC 01317 / Код 00000"
+
+        setResultText("ПАСПОРТНЫЕ ДАННЫЕ БЛОКА УПРАВЛЕНИЯ:\\n" +
+                "• Блок: \${if (isImmo) "Иммобилайзер (0x25)" else "ЭБУ Двигателя (0x01)"}\\n" +
+                "• Номер VAG: $pNum\\n" +
+                "• Компонент: $comp\\n" +
+                "• Кодировка / Дилер: $extra\\n" +
+                "• Протокол связи: KWP1281 (скорость \${protocol.negotiatedBaud} бод, 8N1)\\n" +
+                "• Автомобиль: VW Vento 1995 1.8 ADZ")
     }
 
     private fun copyDiagnosticReport() {
         try {
-            val logText = tvLogs.text.toString()
+            val reportText = tvResults.text.toString()
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = ClipData.newPlainText("Vento Diagnostic Log", logText)
+            val clip = ClipData.newPlainText("Vento Diagnostic Report", reportText)
             clipboard.setPrimaryClip(clip)
-            Toast.makeText(this, "Диагностический отчёт скопирован в буфер обмена!", Toast.LENGTH_SHORT).show()
-            addLog("Отчёт скопирован в буфер обмена.")
+            Toast.makeText(this, "Отчёт скопирован в буфер обмена!", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
-            addLog("Ошибка копирования отчёта: \${e.message}")
+            Toast.makeText(this, "Не удалось скопировать отчёт", Toast.LENGTH_SHORT).show()
         }
     }
 

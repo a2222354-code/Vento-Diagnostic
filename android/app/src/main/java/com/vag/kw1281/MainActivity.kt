@@ -7,11 +7,14 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Color
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -27,27 +30,51 @@ class MainActivity : AppCompatActivity() {
     private var usbManager: UsbManager? = null
     private val ACTION_USB_PERMISSION = "com.vag.kw1281.USB_PERMISSION"
 
+    // UI элементы
     private lateinit var tvStatus: TextView
     private lateinit var tvDeviceInfo: TextView
     private lateinit var tvBaudBadge: TextView
-    private lateinit var tvLogs: TextView
-    private lateinit var scrollViewLogs: ScrollView
+    private lateinit var tvResults: TextView
+    private lateinit var scrollViewResults: ScrollView
 
+    // Табы выбора ЭБУ
+    private lateinit var btnTabEngine: Button
+    private lateinit var btnTabImmo: Button
+    private var selectedEcuAddress: Int = 0x01 // 0x01 = Двигатель, 0x25 = Иммобилайзер
+
+    // Панели отображения
+    private lateinit var layoutLiveData: LinearLayout
     private lateinit var tvGaugeRpm: TextView
     private lateinit var tvGaugeTemp: TextView
     private lateinit var tvGaugeLambda: TextView
     private lateinit var tvGaugeThrottle: TextView
 
+    // Панель иммобилайзера
+    private lateinit var layoutImmoStatus: LinearLayout
+    private lateinit var tvImmoKeyStatus: TextView
+    private lateinit var tvImmoStartStatus: TextView
+    private lateinit var tvImmoKeyCount: TextView
+
+    // Панель теста исполнителей
+    private lateinit var layoutActuatorTest: LinearLayout
+    private lateinit var tvActuatorTitle: TextView
+    private lateinit var tvActuatorDesc: TextView
+    private lateinit var btnActuatorNext: Button
+    private lateinit var btnActuatorStop: Button
+
+    // Основные кнопки
     private lateinit var btnFindUsb: Button
     private lateinit var btnConnectEcu: Button
     private lateinit var btnReadFaults: Button
     private lateinit var btnClearFaults: Button
     private lateinit var btnMeasuring: Button
+    private lateinit var btnActuatorStart: Button
     private lateinit var btnBasicSettings: Button
     private lateinit var btnEcuPassport: Button
     private lateinit var btnShareReport: Button
-    private lateinit var btnClearLog: Button
+    private lateinit var btnClearResults: Button
 
+    // Связь и сессия
     private var foundDevice: UsbDevice? = null
     private var kwDriver: Ftdi5BaudDriver? = null
     private var kwProtocol: Kw1281Protocol? = null
@@ -61,14 +88,13 @@ class MainActivity : AppCompatActivity() {
                 ACTION_USB_PERMISSION -> {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     if (granted) {
-                        addLog("Разрешение на работу с USB получено!")
+                        setResultText("Разрешение на работу с USB адаптером получено. Нажмите «ПОДКЛЮЧИТЬ».")
                         btnConnectEcu.isEnabled = true
                     } else {
-                        addLog("Предупреждение: Разрешение на USB было отклонено пользователем.")
+                        setResultText("Предупреждение: Разрешение USB было отклонено в диалоге Android.")
                     }
                 }
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    addLog("Обнаружено подключение USB устройства.")
                     findUsbAdapter()
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
@@ -77,7 +103,6 @@ class MainActivity : AppCompatActivity() {
                         it.vendorId == 0x0403 || it.vendorId == 0x1A86 || it.vendorId == 0x10C4
                     } == true
                     if (!stillPresent) {
-                        addLog("USB устройство отключено.")
                         stopLiveStream()
                         disconnectSession()
                         foundDevice = null
@@ -85,8 +110,8 @@ class MainActivity : AppCompatActivity() {
                         btnConnectEcu.isEnabled = false
                         tvStatus.text = "Статус: USB отключен"
                         tvDeviceInfo.text = "Подключите USB-OTG кабель"
+                        setResultText("USB KKL адаптер отключен от телефона.")
                     } else {
-                        addLog("Переподключение адаптера...")
                         findUsbAdapter()
                     }
                 }
@@ -97,46 +122,65 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         try {
-            val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
-            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-                addLog("Непредвиденная ошибка: ${throwable.message ?: throwable.javaClass.simpleName}")
-                defaultHandler?.uncaughtException(thread, throwable)
-            }
-
             setContentView(R.layout.activity_main)
 
             usbManager = getSystemService(Context.USB_SERVICE) as? UsbManager
 
+            // Привязка UI
             tvStatus = findViewById(R.id.tvStatus)
             tvDeviceInfo = findViewById(R.id.tvDeviceInfo)
             tvBaudBadge = findViewById(R.id.tvBaudBadge)
-            tvLogs = findViewById(R.id.tvLogs)
-            scrollViewLogs = findViewById(R.id.scrollViewLogs)
+            tvResults = findViewById(R.id.tvResults)
+            scrollViewResults = findViewById(R.id.scrollViewResults)
 
+            btnTabEngine = findViewById(R.id.btnTabEngine)
+            btnTabImmo = findViewById(R.id.btnTabImmo)
+
+            layoutLiveData = findViewById(R.id.layoutLiveData)
             tvGaugeRpm = findViewById(R.id.tvGaugeRpm)
             tvGaugeTemp = findViewById(R.id.tvGaugeTemp)
             tvGaugeLambda = findViewById(R.id.tvGaugeLambda)
             tvGaugeThrottle = findViewById(R.id.tvGaugeThrottle)
+
+            layoutImmoStatus = findViewById(R.id.layoutImmoStatus)
+            tvImmoKeyStatus = findViewById(R.id.tvImmoKeyStatus)
+            tvImmoStartStatus = findViewById(R.id.tvImmoStartStatus)
+            tvImmoKeyCount = findViewById(R.id.tvImmoKeyCount)
+
+            layoutActuatorTest = findViewById(R.id.layoutActuatorTest)
+            tvActuatorTitle = findViewById(R.id.tvActuatorTitle)
+            tvActuatorDesc = findViewById(R.id.tvActuatorDesc)
+            btnActuatorNext = findViewById(R.id.btnActuatorNext)
+            btnActuatorStop = findViewById(R.id.btnActuatorStop)
 
             btnFindUsb = findViewById(R.id.btnFindUsb)
             btnConnectEcu = findViewById(R.id.btnConnectEcu)
             btnReadFaults = findViewById(R.id.btnReadFaults)
             btnClearFaults = findViewById(R.id.btnClearFaults)
             btnMeasuring = findViewById(R.id.btnMeasuring)
+            btnActuatorStart = findViewById(R.id.btnActuatorStart)
             btnBasicSettings = findViewById(R.id.btnBasicSettings)
             btnEcuPassport = findViewById(R.id.btnEcuPassport)
             btnShareReport = findViewById(R.id.btnShareReport)
-            btnClearLog = findViewById(R.id.btnClearLog)
+            btnClearResults = findViewById(R.id.btnClearResults)
 
+            // Переключение табов ЭБУ
+            btnTabEngine.setOnClickListener { switchEcuTab(0x01) }
+            btnTabImmo.setOnClickListener { switchEcuTab(0x25) }
+
+            // Обработчики кнопок
             btnFindUsb.setOnClickListener { findUsbAdapter() }
-            btnConnectEcu.setOnClickListener { connectToEcu() }
+            btnConnectEcu.setOnClickListener { connectToSelectedEcu() }
             btnReadFaults.setOnClickListener { readFaultCodes() }
             btnClearFaults.setOnClickListener { clearFaultCodes() }
             btnMeasuring.setOnClickListener { toggleLiveMeasuring() }
+            btnActuatorStart.setOnClickListener { startActuatorTest() }
+            btnActuatorNext.setOnClickListener { nextActuatorTest() }
+            btnActuatorStop.setOnClickListener { stopActuatorTest() }
             btnBasicSettings.setOnClickListener { enterBasicSettings() }
             btnEcuPassport.setOnClickListener { showEcuPassport() }
             btnShareReport.setOnClickListener { copyDiagnosticReport() }
-            btnClearLog.setOnClickListener { tvLogs.text = "Журнал очищен." }
+            btnClearResults.setOnClickListener { tvResults.text = "Результаты очищены." }
 
             val filter = IntentFilter().apply {
                 addAction(ACTION_USB_PERMISSION)
@@ -150,23 +194,53 @@ class MainActivity : AppCompatActivity() {
             }
             isReceiverRegistered = true
 
-            addLog("=== VENTO DIAGNOSTIC ===")
-            addLog("VW Vento 1995 1.8 ADZ (Bosch Mono-Motronic 1.2.3, 3A0 907 311)")
-            addLog("Протокол VAG KWP1281: 5-бодовая инициализация 7O1 -> 9600 бод 8N1")
+            switchEcuTab(0x01)
             findUsbAdapter()
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
-    private fun addLog(msg: String) {
+    private fun switchEcuTab(addr: Int) {
+        if (selectedEcuAddress != addr) {
+            disconnectSession()
+            setDiagnosticButtonsEnabled(false)
+        }
+        selectedEcuAddress = addr
+
+        if (addr == 0x01) {
+            btnTabEngine.setBackgroundColor(Color.parseColor("#0284C7"))
+            btnTabEngine.setTextColor(Color.WHITE)
+            btnTabImmo.setBackgroundColor(Color.parseColor("#334155"))
+            btnTabImmo.setTextColor(Color.parseColor("#94A3B8"))
+
+            tvDeviceInfo.text = "Блок: Bosch Mono-Motronic 1.2.3 (3A0 907 311)"
+            layoutLiveData.visibility = View.VISIBLE
+            layoutImmoStatus.visibility = View.GONE
+            btnMeasuring.visibility = View.VISIBLE
+            btnActuatorStart.visibility = View.VISIBLE
+            btnBasicSettings.visibility = View.VISIBLE
+        } else {
+            btnTabImmo.setBackgroundColor(Color.parseColor("#0284C7"))
+            btnTabImmo.setTextColor(Color.WHITE)
+            btnTabEngine.setBackgroundColor(Color.parseColor("#334155"))
+            btnTabEngine.setTextColor(Color.parseColor("#94A3B8"))
+
+            tvDeviceInfo.text = "Блок: Иммобилайзер Wegfahrsicherung (1H0 953 257)"
+            layoutLiveData.visibility = View.GONE
+            layoutImmoStatus.visibility = View.VISIBLE
+            btnMeasuring.visibility = View.GONE
+            btnActuatorStart.visibility = View.GONE
+            btnBasicSettings.visibility = View.GONE
+        }
+    }
+
+    private fun setResultText(msg: String) {
         runOnUiThread {
             try {
-                val current = tvLogs.text.toString()
-                val newText = if (current.isEmpty()) msg else "$current\n$msg"
-                tvLogs.text = newText
-                scrollViewLogs.post {
-                    scrollViewLogs.fullScroll(ScrollView.FOCUS_DOWN)
+                tvResults.text = msg
+                scrollViewResults.post {
+                    scrollViewResults.fullScroll(ScrollView.FOCUS_UP)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -178,18 +252,13 @@ class MainActivity : AppCompatActivity() {
         btnReadFaults.isEnabled = enabled
         btnClearFaults.isEnabled = enabled
         btnMeasuring.isEnabled = enabled
+        btnActuatorStart.isEnabled = enabled
         btnBasicSettings.isEnabled = enabled
         btnEcuPassport.isEnabled = enabled
     }
 
     private fun findUsbAdapter() {
-        val manager = usbManager
-        if (manager == null) {
-            tvStatus.text = "Статус: USB сервис недоступен"
-            addLog("Ошибка: В системе отсутствует USB Host сервис.")
-            return
-        }
-
+        val manager = usbManager ?: return
         val deviceList = manager.deviceList
         val ftdi = deviceList.values.firstOrNull { it.vendorId == 0x0403 }
             ?: deviceList.values.firstOrNull { it.vendorId == 0x1A86 || it.vendorId == 0x10C4 }
@@ -197,12 +266,9 @@ class MainActivity : AppCompatActivity() {
         if (ftdi != null) {
             foundDevice = ftdi
             tvStatus.text = "Статус: Адаптер обнаружен!"
-            tvDeviceInfo.text = "Устройство: VID 0x%04X, PID 0x%04X (FTDI / K-Line)".format(ftdi.vendorId, ftdi.productId)
-            addLog("USB KKL адаптер найден: VID=0x%04X, PID=0x%04X".format(ftdi.vendorId, ftdi.productId))
-            
             if (manager.hasPermission(ftdi)) {
                 btnConnectEcu.isEnabled = true
-                addLog("Разрешение USB предоставлено. Нажмите «ПОДКЛЮЧИТЬ ЭБУ».")
+                setResultText("USB KKL адаптер готов к работе. Выберите нужный блок (Двигатель или Иммобилайзер) и нажмите «ПОДКЛЮЧИТЬ».")
             } else {
                 btnConnectEcu.isEnabled = false
                 requestUsbPermission(ftdi)
@@ -212,7 +278,7 @@ class MainActivity : AppCompatActivity() {
             tvDeviceInfo.text = "Подключите USB-OTG кабель к телефону"
             btnConnectEcu.isEnabled = false
             setDiagnosticButtonsEnabled(false)
-            addLog("Адаптер FT232 не обнаружен. Проверьте OTG соединение.")
+            setResultText("Адаптер FT232 / KKL не обнаружен в разъёме USB-OTG.")
         }
     }
 
@@ -228,12 +294,12 @@ class MainActivity : AppCompatActivity() {
                 this, 0, Intent(ACTION_USB_PERMISSION), flags
             )
             manager.requestPermission(device, permissionIntent)
-        } catch (e: Exception) {
-            addLog("Ошибка запроса прав USB: ${e.message}")
-        }
+        } catch (e: Exception) {}
     }
 
     private fun disconnectSession() {
+        stopLiveStream()
+        layoutActuatorTest.visibility = View.GONE
         try {
             kwProtocol?.stopSession()
         } catch (t: Throwable) {}
@@ -244,22 +310,23 @@ class MainActivity : AppCompatActivity() {
         kwDriver = null
     }
 
-    private fun connectToEcu() {
+    private fun connectToSelectedEcu() {
         val dev = foundDevice ?: run {
-            addLog("Сначала подключите USB KKL адаптер.")
+            setResultText("Сначала подключите USB KKL адаптер.")
             return
         }
-        val manager = usbManager ?: run {
-            addLog("USB сервис недоступен на данном устройстве.")
-            return
-        }
+        val manager = usbManager ?: return
+
         lifecycleScope.launch {
             try {
                 stopLiveStream()
+                layoutActuatorTest.visibility = View.GONE
                 btnConnectEcu.isEnabled = false
                 setDiagnosticButtonsEnabled(false)
-                tvStatus.text = "Статус: Инициализация K-Line 5 бод..."
-                
+                val blockName = if (selectedEcuAddress == 0x25) "Иммобилайзера (0x25)" else "ЭБУ Двигателя (0x01)"
+                tvStatus.text = "Инициализация $blockName..."
+                setResultText("Установка связи с $blockName на 5 бод...")
+
                 var driver = kwDriver
                 if (driver == null || !driver.isOpen) {
                     disconnectSession()
@@ -268,9 +335,8 @@ class MainActivity : AppCompatActivity() {
                         kwDriver = newDriver
                         driver = newDriver
                     } else {
-                        tvStatus.text = "Не удалось открыть USB порт"
-                        val err = newDriver.lastError ?: "Неизвестная ошибка"
-                        addLog("Ошибка открытия порта: $err")
+                        tvStatus.text = "Ошибка открытия USB порта"
+                        setResultText("Не удалось открыть USB порт: ${newDriver.lastError ?: "проверьте кабель"}")
                         btnConnectEcu.isEnabled = true
                         return@launch
                     }
@@ -278,24 +344,57 @@ class MainActivity : AppCompatActivity() {
 
                 val protocol = Kw1281Protocol(driver)
                 kwProtocol = protocol
-                val success = protocol.connect { msg -> addLog(msg) }
+                val success = protocol.connect(selectedEcuAddress) { msg ->
+                    // Без вывода сырых байт лога в UI
+                }
+
                 if (success) {
-                    val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else "3A0 907 311"
-                    tvStatus.text = "ЭБУ подключен: $pNum"
-                    tvBaudBadge.text = "${protocol.negotiatedBaud} 8N1"
+                    val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else (if (selectedEcuAddress == 0x25) "1H0 953 257" else "3A0 907 311")
+                    tvStatus.text = "Подключен: $pNum"
+                    tvBaudBadge.text = "${protocol.negotiatedBaud} бод"
                     btnConnectEcu.isEnabled = true
                     setDiagnosticButtonsEnabled(true)
-                    addLog("--- Доступные функции: Ошибки (0x07), Стереть (0x05), Измерения (0x08), Базовые (0x28) ---")
+
+                    if (selectedEcuAddress == 0x25) {
+                        // Опрашиваем статус транспондера иммобилайзера
+                        checkImmobilizerStatus(protocol)
+                    } else {
+                        setResultText("Связь с ЭБУ Двигателя успешно установлена!\n" +
+                                "Номер: ${protocol.ecuPartNumber}\n" +
+                                "Компонент: ${protocol.ecuComponent}\n" +
+                                "Доступны функции: чтение ошибок, живые параметры, тест исполнителей, базовые установки.")
+                    }
                 } else {
-                    tvStatus.text = "Ошибка связи с ЭБУ"
+                    tvStatus.text = "Ошибка связи с блоком"
+                    setResultText("Блок $blockName не отвечает на запрос.\n" +
+                            "• Проверьте, включено ли зажигание (положение ключа ON/приборная панель горит).\n" +
+                            "• Проверьте надёжность контакта K-Line в разъёме OBD2.")
                     btnConnectEcu.isEnabled = true
                 }
             } catch (t: Throwable) {
                 t.printStackTrace()
-                addLog("Сбой при подключении: ${t.message ?: t.javaClass.simpleName}")
-                tvStatus.text = "Ошибка подключения"
+                tvStatus.text = "Сбой подключения"
+                setResultText("Сбой при подключении: ${t.message ?: t.javaClass.simpleName}")
                 btnConnectEcu.isEnabled = true
             }
+        }
+    }
+
+    private suspend fun checkImmobilizerStatus(protocol: Kw1281Protocol) {
+        val status = protocol.readImmobilizerStatus { }
+        if (status != null) {
+            tvImmoKeyStatus.text = "• Транспондер ключа: ${if (status.keyAuthorized) "✅ Распознан (ID33 OK)" else "❌ ОШИБКА (Чип не прочитан)"}"
+            tvImmoStartStatus.text = "• Разрешение пуска двигателя: ${if (status.startPermitted) "✅ РАЗРЕШЁН" else "❌ ЗАБЛОКИРОВАН (заглохнет через 1 сек)"}"
+            tvImmoKeyCount.text = "• Ключей обучено в памяти: ${status.keyCount} шт."
+
+            setResultText("Блок иммобилайзера 1H0 953 257 подключен!\n\n" +
+                    "ДИАГНОСТИКА КЛЮЧА И СИСТЕМЫ ПУСКА:\n" +
+                    "• Разрешение запуска: ${if (status.startPermitted) "РАЗРЕШЕНО (ЭБУ не блокируется)" else "ЗАПРЕЩЕНО (Блокировка мотора)"}\n" +
+                    "• Ответ ЭБУ двигателя: ${if (status.ecuResponds) "Есть связь по W-Line" else "Нет связи с моторным ЭБУ"}\n" +
+                    "• Транспондер чипа: ${if (status.keyAuthorized) "Авторизован" else "Не авторизован / Слишком слабый сигнал катушки"}\n" +
+                    "• Ключей прописано: ${status.keyCount}")
+        } else {
+            setResultText("Иммобилайзер подключен. Номер блока: ${protocol.ecuPartNumber}")
         }
     }
 
@@ -305,32 +404,35 @@ class MainActivity : AppCompatActivity() {
             try {
                 stopLiveStream()
                 btnReadFaults.isEnabled = false
-                val faults = protocol.readFaultCodesDetailed { msg -> addLog(msg) }
+                val faults = protocol.readFaultCodesDetailed { }
                 btnReadFaults.isEnabled = true
 
+                val sb = StringBuilder()
+                val blockTitle = if (selectedEcuAddress == 0x25) "ИММОБИЛАЙЗЕР (1H0 953 257)" else "ЭБУ ДВИГАТЕЛЯ (Mono-Motronic)"
+                sb.append("РЕЗУЛЬТАТЫ ОПРОСА ПАМЯТИ НЕИСПРАВНОСТЕЙ:\n")
+                sb.append("Блок: ").append(blockTitle).append("\n\n")
+
                 if (faults.isEmpty()) {
-                    addLog("==========================================")
-                    addLog("В памяти ЭБУ ошибок нет (DTC 00000).")
-                    addLog("Все датчики и исполнители в пределах допуска.")
-                    addLog("==========================================")
+                    sb.append("✅ В памяти ошибок нет (DTC 00000).\n")
+                    sb.append("Все электрические цепи и датчики в пределах нормы.")
                 } else {
-                    addLog("==========================================")
-                    addLog("НАЙДЕНО НЕИСПРАВНОСТЕЙ: ${faults.size}")
-                    addLog("==========================================")
+                    sb.append("⚠️ ОБНАРУЖЕНО НЕИСПРАВНОСТЕЙ: ").append(faults.size).append("\n\n")
                     for (f in faults) {
-                        addLog("• Код: ${f.code} — ${f.component}")
-                        addLog("  Статус: ${f.statusText}")
-                        addLog("  Причина: ${f.cause}")
-                        addLog("  Совет: ${f.remedy}")
+                        sb.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                        sb.append("КОД: ").append(f.code).append(" — ").append(f.component).append("\n")
+                        sb.append("Статус: ").append(f.statusText).append("\n")
+                        sb.append("Причина: ").append(f.cause).append("\n")
+                        sb.append("Совет: ").append(f.remedy).append("\n")
                         if (f.isNormalWhenStopped) {
-                            addLog("  ℹ️ ПРИМЕЧАНИЕ: На Mono-Motronic 1.2.3 эта ошибка является штатной при незаведённом двигателе!")
+                            sb.append("ℹ️ ПРИМЕЧАНИЕ: На незаведённом моторе эта ошибка является нормой для Mono-Motronic 1.2.3!\n")
                         }
-                        addLog("------------------------------------------")
                     }
+                    sb.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
                 }
+                setResultText(sb.toString())
             } catch (t: Throwable) {
                 btnReadFaults.isEnabled = true
-                addLog("Ошибка чтения DTC: ${t.message ?: t.javaClass.simpleName}")
+                setResultText("Ошибка чтения памяти неисправностей: ${t.message}")
             }
         }
     }
@@ -341,14 +443,17 @@ class MainActivity : AppCompatActivity() {
             try {
                 stopLiveStream()
                 btnClearFaults.isEnabled = false
-                val success = protocol.clearFaultCodes { msg -> addLog(msg) }
+                val success = protocol.clearFaultCodes { }
                 btnClearFaults.isEnabled = true
                 if (success) {
-                    addLog("Память ошибок ЭБУ очищена! Повторите чтение для подтверждения.")
+                    setResultText("✅ Память кодов неисправностей успешно очищена!\n" +
+                            "Нажмите «ОШИБКИ (0x07)» для контрольной проверки.")
+                } else {
+                    setResultText("Не удалось выполнить команду стирания ошибок.")
                 }
             } catch (t: Throwable) {
                 btnClearFaults.isEnabled = true
-                addLog("Ошибка стирания DTC: ${t.message ?: t.javaClass.simpleName}")
+                setResultText("Ошибка стирания ошибок: ${t.message}")
             }
         }
     }
@@ -357,29 +462,28 @@ class MainActivity : AppCompatActivity() {
         if (liveStreamJob != null) {
             stopLiveStream()
             btnMeasuring.text = "ИЗМЕРЕНИЯ (08)"
-            addLog("Поток измерений остановлен.")
+            setResultText("Поток живых измерений остановлен.")
             return
         }
 
         val protocol = kwProtocol ?: run {
-            addLog("Сначала подключитесь к ЭБУ.")
+            setResultText("Сначала подключитесь к ЭБУ.")
             return
         }
 
-        btnMeasuring.text = "СТОП (08)"
-        addLog("Запуск потока Live Data (Группа 000)...")
+        btnMeasuring.text = "ОСТАНОВИТЬ (08)"
+        setResultText("Запущен опрос Live Data (Группа 000). Данные обновляются на приборных шкалах вверху экрана.")
 
         liveStreamJob = lifecycleScope.launch {
             try {
                 while (isActive) {
-                    val m = protocol.readMeasuringGroup(0) { msg -> /* тихий режим */ }
+                    val m = protocol.readMeasuringGroup(0) { }
                     if (m != null) {
                         updateGauges(m)
                     }
-                    delay(450)
+                    delay(400)
                 }
             } catch (t: Throwable) {
-                addLog("Сбой потока измерений: ${t.message}")
             } finally {
                 btnMeasuring.text = "ИЗМЕРЕНИЯ (08)"
             }
@@ -400,55 +504,96 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Тест исполнительных механизмов (0x04)
+    private fun startActuatorTest() {
+        val protocol = kwProtocol ?: return
+        stopLiveStream()
+        layoutActuatorTest.visibility = View.VISIBLE
+        tvActuatorTitle.text = "ТЕСТ ИСПОЛНИТЕЛЕЙ (0x04)"
+        tvActuatorDesc.text = "Запуск первого теста..."
+        nextActuatorTest()
+    }
+
+    private fun nextActuatorTest() {
+        val protocol = kwProtocol ?: return
+        lifecycleScope.launch {
+            try {
+                btnActuatorNext.isEnabled = false
+                val step = protocol.stepActuatorTest { }
+                btnActuatorNext.isEnabled = true
+                if (step != null) {
+                    tvActuatorDesc.text = step
+                    setResultText("АКТИВЕН ТЕСТ ИСПОЛНИТЕЛЕЙ:\n$step\n\nДля перехода к следующему элементу нажмите кнопку «СЛЕДУЮЩИЙ ТЕСТ».")
+                    if (step.contains("завершён", ignoreCase = true)) {
+                        layoutActuatorTest.visibility = View.GONE
+                    }
+                } else {
+                    layoutActuatorTest.visibility = View.GONE
+                    setResultText("Тест исполнителей завершён или отклонён ЭБУ.")
+                }
+            } catch (t: Throwable) {
+                btnActuatorNext.isEnabled = true
+                setResultText("Ошибка шага теста: ${t.message}")
+            }
+        }
+    }
+
+    private fun stopActuatorTest() {
+        kwProtocol?.stopActuatorTest()
+        layoutActuatorTest.visibility = View.GONE
+        setResultText("Тест исполнительных механизмов остановлен пользователем.")
+    }
+
     private fun enterBasicSettings() {
         val protocol = kwProtocol ?: return
         lifecycleScope.launch {
             try {
                 stopLiveStream()
+                layoutActuatorTest.visibility = View.GONE
                 btnBasicSettings.isEnabled = false
-                addLog("==========================================")
-                addLog("ВХОД В РЕЖИМ БАЗОВЫХ УСТАНОВОК (0x28, Группа 000)")
-                addLog("Внимание: ЭБУ отключает динамическое опережение зажигания!")
-                addLog("Обороты фиксируются на ~850–900 об/мин.")
-                addLog("Теперь можно выставлять угол зажигания 6° до ВМТ стробоскопом.")
-                addLog("==========================================")
 
-                val result = protocol.enterBasicSettings(0) { msg -> addLog(msg) }
+                val result = protocol.enterBasicSettings(0) { }
                 btnBasicSettings.isEnabled = true
                 if (result != null) {
                     updateGauges(result)
-                    addLog("Базовые установки активны. Сырые значения группы 000:")
-                    addLog(result.rawValues.joinToString(" ") { "%03d".format(it) })
+                    setResultText("🔧 РЕЖИМ БАЗОВЫХ УСТАНОВОК (0x28, Группа 000) АКТИВЕН!\n\n" +
+                            "• ЭБУ заблокировал динамическое опережение зажигания.\n" +
+                            "• Обороты двигателя зафиксированы на холостом ходу (~850 об/мин).\n" +
+                            "• Теперь можно вращать корпус трамблера и выставлять УОЗ 6° до ВМТ по стробоскопу на метку маховика.\n\n" +
+                            "Сырые параметры группы 000: ${result.rawValues.joinToString(" ") { "%03d".format(it) }}")
                 }
             } catch (t: Throwable) {
                 btnBasicSettings.isEnabled = true
-                addLog("Ошибка базовых установок: ${t.message}")
+                setResultText("Ошибка базовых установок: ${t.message}")
             }
         }
     }
 
     private fun showEcuPassport() {
         val protocol = kwProtocol ?: return
-        addLog("==========================================")
-        addLog("ПАСПОРТНЫЕ ДАННЫЕ ЭБУ (Mono-Motronic):")
-        addLog("• Номер VAG: ${if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else "3A0 907 311"}")
-        addLog("• Компонент: ${if (protocol.ecuComponent.isNotEmpty()) protocol.ecuComponent else "1.8l R4 MONO 1.2.3 D30"}")
-        addLog("• Кодировка / Доп: ${if (protocol.ecuExtra.isNotEmpty()) protocol.ecuExtra else "WSC 01317 / Код 00000"}")
-        addLog("• Скорость сеанса: ${protocol.negotiatedBaud} бод (8N1)")
-        addLog("• Двигатель: 1.8 ADZ (66 кВт / 90 л.с., 1995)")
-        addLog("==========================================")
+        val isImmo = selectedEcuAddress == 0x25
+        val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else (if (isImmo) "1H0 953 257" else "3A0 907 311")
+        val comp = if (protocol.ecuComponent.isNotEmpty()) protocol.ecuComponent else (if (isImmo) "IMMOBILIZER VDO V01" else "1.8l R4 MONO 1.2.3 D30")
+        val extra = if (protocol.ecuExtra.isNotEmpty()) protocol.ecuExtra else "WSC 01317 / Код 00000"
+
+        setResultText("ПАСПОРТНЫЕ ДАННЫЕ БЛОКА УПРАВЛЕНИЯ:\n" +
+                "• Блок: ${if (isImmo) "Иммобилайзер (0x25)" else "ЭБУ Двигателя (0x01)"}\n" +
+                "• Номер VAG: $pNum\n" +
+                "• Компонент: $comp\n" +
+                "• Кодировка / Дилер: $extra\n" +
+                "• Протокол связи: KWP1281 (скорость ${protocol.negotiatedBaud} бод, 8N1)\n" +
+                "• Автомобиль: VW Vento 1995 1.8 ADZ")
     }
 
     private fun copyDiagnosticReport() {
         try {
-            val logText = tvLogs.text.toString()
+            val reportText = tvResults.text.toString()
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = ClipData.newPlainText("Vento Diagnostic Log", logText)
+            val clip = ClipData.newPlainText("Vento Diagnostic Report", reportText)
             clipboard.setPrimaryClip(clip)
-            Toast.makeText(this, "Диагностический отчёт скопирован в буфер обмена!", Toast.LENGTH_SHORT).show()
-            addLog("Отчёт скопирован в буфер обмена.")
+            Toast.makeText(this, "Отчёт скопирован в буфер обмена!", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
-            addLog("Ошибка копирования отчёта: ${e.message}")
+            Toast.makeText(this, "Не удалось скопировать отчёт", Toast.LENGTH_SHORT).show()
         }
     }
 
