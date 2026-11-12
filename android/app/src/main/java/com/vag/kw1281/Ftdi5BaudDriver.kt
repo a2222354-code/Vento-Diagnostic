@@ -14,13 +14,15 @@ import java.util.ArrayDeque
 /**
  * Высокоточный аппаратный драйвер FTDI FT232 для шины K-Line / VAG KWP1281.
  * 
- * Реализовано в строгом соответствии с декомпилированным нативным протоколом:
- * 1. Управление уровнем TX через Bit-Bang (SIO_SET_BITMODE) и SetBreak.
- * 2. 5-бодовая посылка по абсолютному дедлайну 200.0 мс на бит (LSB first, odd parity).
- * 3. Пауза перед стартом ~250 мс, стоп-бит 200 мс, затем дополнительная пауза 20 мс до перехода в UART.
- * 4. Удержание сигналов DTR и RTS в активном состоянии (питание приёмопередатчика K-Line).
- * 5. Буферизация FTDI через 256-байтный буфер (обход ограничения 2-байтного заголовка модема).
- * 6. Побайтовое подтверждение с фильтрацией KKL loopback-эхо (функция isEchoOrComplement).
+ * Ключевые особенности надёжности:
+ * 1. 5-бодовая посылка формируется через стандартный аппаратный Break (setBreak),
+ *    без использования опасного SIO_SET_BITMODE и bulk-записей, вызывавших сброс FTDI
+ *    и зависание USB OTG ("USB отключен").
+ * 2. Точный абсолютный дедлайн на 200.0 мс на бит (start + N * 200ms) без накапливания ошибки.
+ * 3. Пауза 250 мс перед стартом, стоп-бит 200 мс, пауза 25 мс до чтения ответа.
+ * 4. Удержание линий DTR/RTS (питание трансивера K-Line).
+ * 5. Буферизация FTDI через 256-байтный буфер (обход 2-байтного заголовка модема D2XX).
+ * 6. Алгоритм isEchoOrComplement для надёжной фильтрации однопроводного K-Line эхо.
  */
 class Ftdi5BaudDriver(
     private val usbManager: UsbManager,
@@ -28,14 +30,16 @@ class Ftdi5BaudDriver(
 ) {
     private var connection: UsbDeviceConnection? = null
     private var port: UsbSerialPort? = null
-    private var isBitBangActive = false
 
     private val rxQueue = ArrayDeque<Byte>()
     var lastError: String? = null
         private set
 
+    val isOpen: Boolean
+        get() = port?.isOpen == true && connection != null
+
     companion object {
-        private const val BIT_TIME_NANOS = 200_000_000L // 200.0 мс = 5 бод
+        private const val BIT_DURATION_NANOS = 200_000_000L // 200.0 мс = 5 бод
     }
 
     suspend fun open(baud: Int = 9600): Boolean = withContext(Dispatchers.IO) {
@@ -44,7 +48,7 @@ class Ftdi5BaudDriver(
             lastError = null
 
             connection = usbManager.openDevice(device) ?: run {
-                lastError = "Не удалось открыть USB подключение"
+                lastError = "Не удалось открыть USB подключение к FTDI"
                 return@withContext false
             }
 
@@ -55,7 +59,7 @@ class Ftdi5BaudDriver(
             }
             val driver = prober ?: FtdiSerialDriver(device)
             if (driver.ports.isEmpty()) {
-                lastError = "COM порт не обнаружен в драйвере"
+                lastError = "COM порт не обнаружен в драйвере FTDI"
                 return@withContext false
             }
 
@@ -63,8 +67,13 @@ class Ftdi5BaudDriver(
             port = p
             p.open(connection)
 
-            // Устанавливаем режим UART 8N1
+            // Устанавливаем режим UART 8N1 и активные DTR/RTS
             setUartMode(baud)
+
+            // Снижаем FTDI Latency Timer до 2 мс для мгновенного отклика K-Line
+            try {
+                connection?.controlTransfer(0x40, 0x09, 2, 1, null, 0, 100)
+            } catch (t: Throwable) {}
 
             // Первичная очистка буферов
             try { p.purgeHwBuffers(true, true) } catch (t: Throwable) {}
@@ -81,121 +90,103 @@ class Ftdi5BaudDriver(
     }
 
     /**
-     * Перевод чипа FTDI в режим Asynchronous Bit-Bang (управление выводом TX)
-     */
-    fun setBitBangMode() {
-        isBitBangActive = true
-        try {
-            // SIO_SET_BITMODE (0x0B): wValue = (mask << 8) | mode
-            // mask = 0x01 (TXD pin as output), mode = 0x01 (Async Bitbang)
-            connection?.controlTransfer(0x40, 0x0B, 0x0101, 1, null, 0, 100)
-        } catch (t: Throwable) {}
-        try {
-            port?.setDTR(true)
-            port?.setRTS(true)
-        } catch (t: Throwable) {}
-    }
-
-    /**
-     * Установка физического состояния линии TX:
-     * high = true  -> Mark (линия K-Line 12 В, неактивна)
-     * high = false -> Space (линия K-Line 0 В, активна)
+     * Установка физического состояния линии TX через аппаратный UART Break:
+     * high = true  -> Mark (TX = 5 В, K-Line = 12 В, неактивна/Idle)  -> Break OFF
+     * high = false -> Space (TX = 0 В, K-Line = 0 В, активна)        -> Break ON
      */
     fun setPinState(high: Boolean) {
-        if (isBitBangActive) {
-            try {
-                port?.write(if (high) byteArrayOf(0x01) else byteArrayOf(0x00), 50)
-            } catch (t: Throwable) {}
-        }
         try {
-            // Дублируем через break state для надёжности на любых типах адаптеров
+            // В FTDI setBreak(true) принудительно прижимает TX к 0 В (Space)
+            // setBreak(false) отпускает TX в логическую 1 (Mark, 12 В на K-Line)
             port?.setBreak(!high)
-        } catch (t: Throwable) {}
+        } catch (t: Throwable) {
+            lastError = "setBreak error: ${t.message}"
+        }
     }
 
     /**
-     * Возврат чипа FTDI в стандартный режим UART (8N1)
+     * Конфигурация режима UART (8N1) и удержание линий питания K-Line (DTR/RTS)
      */
     fun setUartMode(baud: Int = 9600) {
-        isBitBangActive = false
-        try {
-            // SIO_SET_BITMODE (0x0B): wValue = 0x0000 (Mode 0: Reset to normal UART)
-            connection?.controlTransfer(0x40, 0x0B, 0x0000, 1, null, 0, 100)
-        } catch (t: Throwable) {}
         try {
             port?.setBreak(false)
             port?.setParameters(baud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
             port?.setDTR(true)
             port?.setRTS(true)
-        } catch (t: Throwable) {}
+        } catch (t: Throwable) {
+            lastError = "setUartMode error: ${t.message}"
+        }
     }
 
     /**
      * Посылка 5-бодовой последовательности инициализации адреса ЭБУ
-     * по абсолютному дедлайну согласно спецификации KWP1281.
+     * по абсолютному дедлайну согласно спецификации KWP1281 (2000.0 мс на посылку).
      */
     suspend fun send5BaudInitAddress(
         address: Int = 0x01,
         targetBaud: Int = 9600,
         onLog: (String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
-        val p = port ?: return@withContext false
+        val p = port ?: run {
+            lastError = "Порт не открыт"
+            return@withContext false
+        }
         onLog("Инициализация K-Line (DTR/RTS активны, пауза 250 мс)...")
 
         try {
-            // 1. Переводим адаптер в bit-bang, TX = HIGH (idle)
-            setBitBangMode()
-            setPinState(true)
+            // 1. Убеждаемся, что режим UART установлен и линия в состоянии Idle (HIGH, 12 В)
+            setUartMode(targetBaud)
+            setPinState(true) // Break OFF -> TX = 12 В Idle
 
-            // 2. Пауза перед стартом: ~250 мс
+            // 2. Пауза перед стартом: ~250 мс (согласно декомпилированному libkwp1281)
             Thread.sleep(250)
 
             onLog("5 бод: посылка адреса 0x%02X (200.0 мс/бит, 7O1)...".format(address))
 
-            var targetNanos = System.nanoTime()
+            val tStart = System.nanoTime()
 
-            fun waitBitDeadline() {
-                targetNanos += BIT_TIME_NANOS
-                while (System.nanoTime() < targetNanos) {
-                    val remainingMs = (targetNanos - System.nanoTime()) / 1_000_000L
-                    if (remainingMs > 15) {
+            fun waitExactDeadline(stepIndex: Int) {
+                val deadline = tStart + (stepIndex * BIT_DURATION_NANOS)
+                while (System.nanoTime() < deadline) {
+                    val remainingMs = (deadline - System.nanoTime()) / 1_000_000L
+                    if (remainingMs > 12) {
                         try {
-                            Thread.sleep(remainingMs - 10)
+                            Thread.sleep(remainingMs - 6)
                         } catch (e: InterruptedException) {}
                     }
                 }
             }
 
-            // 3. Старт-бит: TX = LOW (0 В), 200 мс
+            // Шаг 1. Старт-бит: TX = LOW (0 В на K-Line), 200 мс
             setPinState(false)
-            waitBitDeadline()
+            waitExactDeadline(1)
 
-            // 4. 7 бит адреса, LSB first, по 200 мс каждый
+            // Шаги 2..8. 7 бит адреса, LSB first, по 200 мс каждый
             var parity = 0
             for (i in 0 until 7) {
                 val bit = (address shr i) and 0x01
                 parity = parity xor bit
                 setPinState(bit == 1)
-                waitBitDeadline()
+                waitExactDeadline(2 + i)
             }
 
-            // 5. Бит чётности: TX = !(parity) -> нечётная чётность (odd), 200 мс
-            // Для 0x01 (единиц=1, parity=1) -> !(1) = 0 -> LOW
+            // Шаг 9. Бит чётности: TX = !(parity) -> нечётная чётность (odd), 200 мс
+            // Для адреса 0x01: сумма единиц = 1 (нечётное), значит бит чётности = 0 -> LOW (0 В)
             val parityBit = if (parity != 0) 0 else 1
             setPinState(parityBit == 1)
-            waitBitDeadline()
+            waitExactDeadline(9)
 
-            // 6. Стоп-бит: TX = HIGH (12 В), ровно 200 мс
+            // Шаг 10. Стоп-бит: TX = HIGH (12 В на K-Line), ровно 200 мс
             setPinState(true)
-            waitBitDeadline()
+            waitExactDeadline(10)
 
-            // 7. Дополнительная пауза после стопа: 20 мс
-            Thread.sleep(20)
+            // Шаг 11. Дополнительная пауза после стопа: 25 мс (libkwp1281)
+            Thread.sleep(25)
 
-            // 8. Переключение в UART (8N1, 9600 бод)
+            // Шаг 12. Переключение UART на приём ответа от ЭБУ (8N1)
             setUartMode(targetBaud)
 
-            // 9. Очищаем очередь приёма и аппаратные буферы от следов break
+            // Очищаем приёмную очередь и аппаратные буферы от следов break-сигнала
             synchronized(rxQueue) {
                 rxQueue.clear()
             }
@@ -203,7 +194,7 @@ class Ftdi5BaudDriver(
                 p.purgeHwBuffers(true, true)
             } catch (t: Throwable) {}
 
-            onLog("5-бодовая посылка завершена. Линия переключена на $targetBaud бод 8N1.")
+            onLog("5-бодовая посылка завершена (2000 мс). Ожидание ответа на $targetBaud бод 8N1...")
             true
         } catch (t: Throwable) {
             lastError = "${t.javaClass.simpleName}: ${t.message}"
@@ -328,7 +319,7 @@ class Ftdi5BaudDriver(
             rxQueue.clear()
         }
         try {
-            setUartMode(9600)
+            port?.setBreak(false)
         } catch (t: Throwable) {}
         try {
             port?.close()

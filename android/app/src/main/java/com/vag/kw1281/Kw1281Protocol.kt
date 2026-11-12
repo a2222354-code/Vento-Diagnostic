@@ -27,7 +27,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     var ecuPartNumber: String = ""
     var ecuComponent: String = ""
     var ecuExtra: String = ""
-    val negotiatedBaud: Int = 9600
+    var negotiatedBaud: Int = 9600
 
     private var isSessionActive = false
     private val busMutex = Mutex()
@@ -59,7 +59,8 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     }
 
     /**
-     * Подключение к ЭБУ двигателя (адрес 0x01) на фиксированной скорости 9600 бод
+     * Подключение к ЭБУ двигателя (адрес 0x01).
+     * Проверяет скорость 9600 бод, а при необходимости выполняет автоматический фоллбек на 10400 бод.
      */
     suspend fun connect(onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
         busMutex.withLock {
@@ -71,78 +72,89 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 ecuComponent = ""
                 ecuExtra = ""
 
-                onLog("--- Запуск сеанса KWP1281 (9600 бод) ---")
-
-                // 1. Посылка адреса 0x01 на 5 бод
-                val sent = driver.send5BaudInitAddress(0x01, 9600, onLog)
-                if (!sent) return@withContext false
-
-                // 2. Ожидание синхробайта 0x55 (таймаут до 5000 мс)
-                onLog("Ожидание синхробайта 0x55 от ЭБУ (до 5 с)...")
-                val syncStart = System.currentTimeMillis()
-                var syncFound = false
-                val foreignBytes = mutableListOf<String>()
-
-                while (System.currentTimeMillis() - syncStart < 5000) {
-                    val b = driver.readByte(300)
-                    if (b >= 0) {
-                        if (b == 0x55) {
-                            syncFound = true
-                            break
-                        } else {
-                            val hex = "0x%02X".format(b)
-                            foreignBytes.add(hex)
-                            onLog("Посторонний байт $hex вместо 0x55 (отброшен)")
-                        }
+                val speeds = listOf(9600, 10400)
+                for (speed in speeds) {
+                    onLog("--- Запуск сеанса KWP1281 ($speed бод) ---")
+                    if (tryConnectSpeed(speed, onLog)) {
+                        negotiatedBaud = speed
+                        isSessionActive = true
+                        startKeepAlive(onLog)
+                        onLog("Сеанс KWP1281 успешно установлен на $speed бод! ЭБУ готов к командам.")
+                        return@withContext true
                     }
+                    delay(300)
                 }
-
-                if (!syncFound) {
-                    val rxSummary = if (foreignBytes.isEmpty()) "линия молчит" else "принято: ${foreignBytes.joinToString(" ")}"
-                    val err = driver.lastError?.let { " [Ошибка USB: $it]" } ?: ""
-                    onLog("Синхробайт 0x55 не обнаружен ($rxSummary)$err.")
-                    return@withContext false
-                }
-
-                onLog("Синхробайт 0x55 успешно принят!")
-
-                // 3. Приём ключевых байтов KW1 и KW2 (таймаут 1000 мс)
-                val kb1 = driver.readByte(1000)
-                if (kb1 < 0) {
-                    onLog("Ошибка: таймаут чтения Keyword 1")
-                    return@withContext false
-                }
-                val kb2 = driver.readByte(1000)
-                if (kb2 < 0) {
-                    onLog("Ошибка: таймаут чтения Keyword 2")
-                    return@withContext false
-                }
-
-                val proto = ((kb2 and 0x7F) shl 7) + (kb1 and 0x7F)
-                onLog("Ключевые байты: 0x%02X 0x%02X -> KWP%d".format(kb1, kb2, proto))
-
-                // 4. Пауза 35 мс (Compat Mode) и отправка инверсии ~KW2
-                delay(35)
-                val comp = ((kb2 xor 0xFF) and 0xFF).toByte()
-                driver.writeRawByte(comp, 300)
-                onLog("Отправлена инверсия ~KW2: 0x%02X".format(comp.toInt() and 0xFF))
-
-                // 5. Чтение первого блока идентификации и ответ ACK
-                val ok = readIdentificationBlocks(onLog)
-                if (ok) {
-                    isSessionActive = true
-                    startKeepAlive(onLog)
-                    onLog("Сеанс KWP1281 успешно установлен! ЭБУ готов к командам.")
-                    return@withContext true
-                } else {
-                    onLog("Не удалось завершить идентификацию ЭБУ.")
-                    return@withContext false
-                }
+                onLog("Подключение не удалось. Проверьте включение зажигания (положение ON) и контакты K-Line.")
+                return@withContext false
             } catch (t: Throwable) {
                 onLog("Исключение сессии KWP1281: ${t.message ?: t.javaClass.simpleName}")
                 return@withContext false
             }
         }
+    }
+
+    private suspend fun tryConnectSpeed(targetBaud: Int, onLog: (String) -> Unit): Boolean {
+        // 1. Посылка адреса 0x01 на 5 бод
+        val sent = driver.send5BaudInitAddress(0x01, targetBaud, onLog)
+        if (!sent) return false
+
+        // 2. Ожидание синхробайта 0x55 (таймаут до 3.5 с)
+        onLog("Ожидание синхробайта 0x55 от ЭБУ ($targetBaud бод, до 3.5 с)...")
+        val syncStart = System.currentTimeMillis()
+        var syncFound = false
+        val foreignBytes = mutableListOf<String>()
+
+        while (System.currentTimeMillis() - syncStart < 3500) {
+            val b = driver.readByte(250)
+            if (b >= 0) {
+                if (b == 0x55) {
+                    syncFound = true
+                    break
+                } else {
+                    val hex = "0x%02X".format(b)
+                    foreignBytes.add(hex)
+                    onLog("Байт линии: $hex (отброшен)")
+                }
+            }
+        }
+
+        if (!syncFound) {
+            val rxSummary = if (foreignBytes.isEmpty()) "линия молчит" else "принято: ${foreignBytes.joinToString(" ")}"
+            val err = driver.lastError?.let { " [USB: $it]" } ?: ""
+            onLog("Синхробайт 0x55 не обнаружен ($rxSummary)$err.")
+            return false
+        }
+
+        onLog("Синхробайт 0x55 успешно принят!")
+
+        // 3. Приём ключевых байтов KW1 и KW2 (таймаут 1000 мс)
+        val kb1 = driver.readByte(1000)
+        if (kb1 < 0) {
+            onLog("Ошибка: таймаут чтения Keyword 1")
+            return false
+        }
+        val kb2 = driver.readByte(1000)
+        if (kb2 < 0) {
+            onLog("Ошибка: таймаут чтения Keyword 2")
+            return false
+        }
+
+        val proto = ((kb2 and 0x7F) shl 7) + (kb1 and 0x7F)
+        onLog("Ключевые байты: 0x%02X 0x%02X -> KWP%d".format(kb1, kb2, proto))
+
+        // 4. Пауза 35 мс (Compat Mode) и отправка инверсии ~KW2
+        delay(35)
+        val comp = ((kb2 xor 0xFF) and 0xFF).toByte()
+        driver.writeRawByte(comp, 300)
+        onLog("Отправлена инверсия ~KW2: 0x%02X".format(comp.toInt() and 0xFF))
+
+        // 5. Чтение первого блока идентификации и ответ ACK
+        val ok = readIdentificationBlocks(onLog)
+        if (!ok) {
+            onLog("Не удалось завершить чтение паспортных данных ЭБУ.")
+            return false
+        }
+        return true
     }
 
     /**

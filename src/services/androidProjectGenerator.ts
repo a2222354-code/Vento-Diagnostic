@@ -81,20 +81,22 @@ import com.hoho.android.usbserial.driver.FtdiSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.util.ArrayDeque
 
 /**
- * Высокоточный и надежный драйвер K-Line / FTDI FT232 для KW1281.
+ * Высокоточный аппаратный драйвер FTDI FT232 для шины K-Line / VAG KWP1281.
  * 
- * ВАЖНО для FTDI в usb-serial-for-android:
- * 1. p.read(...) требует буфер длиной более 2 байт (из-за 2 байт заголовка статуса модема FTDI).
- *    Чтение одиночных байт реализовано через очередь rxQueue и буфер 256 байт.
- * 2. Для корректной работы приёмопередатчика K-Line (L9637D / MC33199 / транзисторы)
- *    необходимо удерживать сигналы DTR и RTS в активном состоянии (true), как в VAG-COM на ПК.
- * 3. Переключение на рабочую скорость (9600/10400) и очистка мусора от Break производятся
- *    в середине стоп-бита (когда линия гарантированно свободна), чтобы ни в коем случае
- *    не стереть входящий байт 0x55 от ЭБУ.
+ * Ключевые особенности надёжности:
+ * 1. 5-бодовая посылка формируется через стандартный аппаратный Break (setBreak),
+ *    без использования опасного SIO_SET_BITMODE и bulk-записей, вызывавших сброс FTDI
+ *    и зависание USB OTG ("USB отключен").
+ * 2. Точный абсолютный дедлайн на 200.0 мс на бит (start + N * 200ms) без накапливания ошибки.
+ * 3. Пауза 250 мс перед стартом, стоп-бит 200 мс, пауза 25 мс до чтения ответа.
+ * 4. Удержание линий DTR/RTS (питание трансивера K-Line).
+ * 5. Буферизация FTDI через 256-байтный буфер (обход 2-байтного заголовка модема D2XX).
+ * 6. Алгоритм isEchoOrComplement для надёжной фильтрации однопроводного K-Line эхо.
  */
 class Ftdi5BaudDriver(
     private val usbManager: UsbManager,
@@ -103,49 +105,51 @@ class Ftdi5BaudDriver(
     private var connection: UsbDeviceConnection? = null
     private var port: UsbSerialPort? = null
 
-    // Очередь для побайтового чтения
     private val rxQueue = ArrayDeque<Byte>()
     var lastError: String? = null
         private set
 
+    val isOpen: Boolean
+        get() = port?.isOpen == true && connection != null
+
     companion object {
-        private const val BIT_TIME_NANOS = 200_000_000L // 200 мс = 5 бод
+        private const val BIT_DURATION_NANOS = 200_000_000L // 200.0 мс = 5 бод
     }
 
-    suspend fun open(initialBaud: Int = 9600): Boolean = withContext(Dispatchers.IO) {
+    suspend fun open(baud: Int = 9600): Boolean = withContext(Dispatchers.IO) {
         try {
             close()
             lastError = null
 
             connection = usbManager.openDevice(device) ?: run {
-                lastError = "Не удалось открыть соединение UsbDeviceConnection"
+                lastError = "Не удалось открыть USB подключение к FTDI"
                 return@withContext false
             }
 
-            val proberDriver = try {
+            val prober = try {
                 UsbSerialProber.getDefaultProber().probeDevice(device)
             } catch (t: Throwable) {
                 null
             }
-            val driver = proberDriver ?: FtdiSerialDriver(device)
+            val driver = prober ?: FtdiSerialDriver(device)
             if (driver.ports.isEmpty()) {
-                lastError = "Устройство не содержит доступных COM-портов"
+                lastError = "COM порт не обнаружен в драйвере FTDI"
                 return@withContext false
             }
-            
+
             val p = driver.ports[0]
             port = p
             p.open(connection)
 
+            // Устанавливаем режим UART 8N1 и активные DTR/RTS
+            setUartMode(baud)
+
+            // Снижаем FTDI Latency Timer до 2 мс для мгновенного отклика K-Line
             try {
-                p.setParameters(initialBaud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+                connection?.controlTransfer(0x40, 0x09, 2, 1, null, 0, 100)
             } catch (t: Throwable) {}
 
-            // Активируем сигналы DTR и RTS (необходимо для питания и включения микросхемы K-Line)
-            try { p.setDTR(true) } catch (t: Throwable) {}
-            try { p.setRTS(true) } catch (t: Throwable) {}
-
-            // Первичный сброс буферов
+            // Первичная очистка буферов
             try { p.purgeHwBuffers(true, true) } catch (t: Throwable) {}
             synchronized(rxQueue) {
                 rxQueue.clear()
@@ -159,86 +163,104 @@ class Ftdi5BaudDriver(
         }
     }
 
-    fun clearRxQueue() {
-        synchronized(rxQueue) {
-            rxQueue.clear()
+    /**
+     * Установка физического состояния линии TX через аппаратный UART Break:
+     * high = true  -> Mark (TX = 5 В, K-Line = 12 В, неактивна/Idle)  -> Break OFF
+     * high = false -> Space (TX = 0 В, K-Line = 0 В, активна)        -> Break ON
+     */
+    fun setPinState(high: Boolean) {
+        try {
+            // В FTDI setBreak(true) принудительно прижимает TX к 0 В (Space)
+            // setBreak(false) отпускает TX в логическую 1 (Mark, 12 В на K-Line)
+            port?.setBreak(!high)
+        } catch (t: Throwable) {
+            lastError = "setBreak error: \${t.message}"
         }
     }
 
-    private class CycleWaiter(private val periodNanos: Long) {
-        private var nextTargetNanos = System.nanoTime()
-
-        fun waitNext() {
-            nextTargetNanos += periodNanos
-            val now = System.nanoTime()
-            val remainingMs = (nextTargetNanos - now) / 1_000_000L
-            if (remainingMs > 15) {
-                try {
-                    Thread.sleep(remainingMs - 10)
-                } catch (e: InterruptedException) {}
-            }
-            while (System.nanoTime() < nextTargetNanos) {
-                // Плотный цикл для идеальной микросекундной точности 200.0 мс
-            }
+    /**
+     * Конфигурация режима UART (8N1) и удержание линий питания K-Line (DTR/RTS)
+     */
+    fun setUartMode(baud: Int = 9600) {
+        try {
+            port?.setBreak(false)
+            port?.setParameters(baud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+            port?.setDTR(true)
+            port?.setRTS(true)
+        } catch (t: Throwable) {
+            lastError = "setUartMode error: \${t.message}"
         }
     }
 
+    /**
+     * Посылка 5-бодовой последовательности инициализации адреса ЭБУ
+     * по абсолютному дедлайну согласно спецификации KWP1281 (2000.0 мс на посылку).
+     */
     suspend fun send5BaudInitAddress(
         address: Int = 0x01,
         targetBaud: Int = 9600,
         onLog: (String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
-        val p = port ?: return@withContext false
-        onLog("Подготовка K-Line (DTR/RTS ВКЛ, пауза 400 мс)...")
+        val p = port ?: run {
+            lastError = "Порт не открыт"
+            return@withContext false
+        }
+        onLog("Инициализация K-Line (DTR/RTS активны, пауза 250 мс)...")
 
         try {
-            // Убеждаемся, что модемные линии активны, а линия K-Line в покое (Mark, +12V)
-            try { p.setDTR(true) } catch (t: Throwable) {}
-            try { p.setRTS(true) } catch (t: Throwable) {}
-            try { p.setBreak(false) } catch (t: Throwable) {}
-            Thread.sleep(400)
+            // 1. Убеждаемся, что режим UART установлен и линия в состоянии Idle (HIGH, 12 В)
+            setUartMode(targetBaud)
+            setPinState(true) // Break OFF -> TX = 12 В Idle
 
-            onLog("5 бод: посылка адреса 0x%02X (200 мс/бит)...".format(address))
-            val waiter = CycleWaiter(BIT_TIME_NANOS)
+            // 2. Пауза перед стартом: ~250 мс (согласно декомпилированному libkwp1281)
+            Thread.sleep(250)
 
-            // 1. Старт-бит: Space (0) -> Break = true (0V)
-            try { p.setBreak(true) } catch (t: Throwable) {}
-            waiter.waitNext()
+            onLog("5 бод: посылка адреса 0x%02X (200.0 мс/бит, 7O1)...".format(address))
 
-            // 2. 7 бит данных LSB first
-            var onesCount = 0
+            val tStart = System.nanoTime()
+
+            fun waitExactDeadline(stepIndex: Int) {
+                val deadline = tStart + (stepIndex * BIT_DURATION_NANOS)
+                while (System.nanoTime() < deadline) {
+                    val remainingMs = (deadline - System.nanoTime()) / 1_000_000L
+                    if (remainingMs > 12) {
+                        try {
+                            Thread.sleep(remainingMs - 6)
+                        } catch (e: InterruptedException) {}
+                    }
+                }
+            }
+
+            // Шаг 1. Старт-бит: TX = LOW (0 В на K-Line), 200 мс
+            setPinState(false)
+            waitExactDeadline(1)
+
+            // Шаги 2..8. 7 бит адреса, LSB first, по 200 мс каждый
+            var parity = 0
             for (i in 0 until 7) {
                 val bit = (address shr i) and 0x01
-                if (bit == 1) {
-                    onesCount++
-                    try { p.setBreak(false) } catch (t: Throwable) {} // Mark (12V)
-                } else {
-                    try { p.setBreak(true) } catch (t: Throwable) {}  // Space (0V)
-                }
-                waiter.waitNext()
+                parity = parity xor bit
+                setPinState(bit == 1)
+                waitExactDeadline(2 + i)
             }
 
-            // 3. Бит четности (Odd Parity для KW1281)
-            val parityBit = if (onesCount % 2 != 0) 0 else 1
-            try { p.setBreak(parityBit == 0) } catch (t: Throwable) {}
-            waiter.waitNext()
+            // Шаг 9. Бит чётности: TX = !(parity) -> нечётная чётность (odd), 200 мс
+            // Для адреса 0x01: сумма единиц = 1 (нечётное), значит бит чётности = 0 -> LOW (0 В)
+            val parityBit = if (parity != 0) 0 else 1
+            setPinState(parityBit == 1)
+            waitExactDeadline(9)
 
-            // 4. Стоп-бит: Mark (1) -> Break = false (12V)
-            try { p.setBreak(false) } catch (t: Throwable) {}
-            
-            // Выжидаем первые 100 мс стоп-бита
-            Thread.sleep(100)
+            // Шаг 10. Стоп-бит: TX = HIGH (12 В на K-Line), ровно 200 мс
+            setPinState(true)
+            waitExactDeadline(10)
 
-            // В середине стоп-бита (линия гарантированно в покое) конфигурируем рабочую скорость UART
-            try {
-                p.setParameters(targetBaud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
-                p.setDTR(true)
-                p.setRTS(true)
-            } catch (t: Throwable) {
-                onLog("Предупреждение UART: \${t.message}")
-            }
+            // Шаг 11. Дополнительная пауза после стопа: 25 мс (libkwp1281)
+            Thread.sleep(25)
 
-            // Очищаем эхо/мусор от Break до того, как ЭБУ начнет отвечать
+            // Шаг 12. Переключение UART на приём ответа от ЭБУ (8N1)
+            setUartMode(targetBaud)
+
+            // Очищаем приёмную очередь и аппаратные буферы от следов break-сигнала
             synchronized(rxQueue) {
                 rxQueue.clear()
             }
@@ -246,10 +268,7 @@ class Ftdi5BaudDriver(
                 p.purgeHwBuffers(true, true)
             } catch (t: Throwable) {}
 
-            // Выжидаем оставшиеся 100 мс стоп-бита
-            Thread.sleep(100)
-
-            onLog("5-бодовая посылка завершена. Ожидание ответа ЭБУ...")
+            onLog("5-бодовая посылка завершена (2000 мс). Ожидание ответа на $targetBaud бод 8N1...")
             true
         } catch (t: Throwable) {
             lastError = "\${t.javaClass.simpleName}: \${t.message}"
@@ -259,7 +278,7 @@ class Ftdi5BaudDriver(
     }
 
     /**
-     * Чтение одного байта с таймаутом через 256-байтный буфер (требование FTDI драйвера)
+     * Побайтовое чтение из FTDI с таймаутом через 256-байтный буфер
      */
     suspend fun readByte(timeoutMs: Int): Int = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext -1
@@ -294,47 +313,88 @@ class Ftdi5BaudDriver(
     }
 
     /**
-     * Чтение нескольких байт в буфер
+     * Отправка байта с подтверждением инверсией от ЭБУ (~byte)
+     * и корректной фильтрацией собственного loopback-эхо K-Line (алгоритм isEchoOrComplement).
      */
-    suspend fun readBytes(buffer: ByteArray, timeoutMs: Int): Int = withContext(Dispatchers.IO) {
-        if (buffer.isEmpty()) return@withContext 0
-        var count = 0
-        val start = System.currentTimeMillis()
-        while (count < buffer.size && (System.currentTimeMillis() - start < timeoutMs)) {
-            val remainingTimeout = (timeoutMs - (System.currentTimeMillis() - start)).toInt().coerceAtLeast(20)
-            val b = readByte(remainingTimeout)
-            if (b >= 0) {
-                buffer[count] = b.toByte()
-                count++
-            } else {
-                break
+    suspend fun writeByteAndVerifyAck(b: Byte, timeoutMs: Int = 300, maxRetries: Int = 4): Boolean = withContext(Dispatchers.IO) {
+        val p = port ?: return@withContext false
+        val sentVal = b.toInt() and 0xFF
+        val compExpected = (sentVal xor 0xFF) and 0xFF
+
+        for (attempt in 1..maxRetries) {
+            try {
+                p.write(byteArrayOf(b), timeoutMs)
+            } catch (t: Throwable) {
+                lastError = "\${t.javaClass.simpleName}: \${t.message}"
+                return@withContext false
             }
+
+            val start = System.currentTimeMillis()
+            var gotEcho = false
+
+            while (System.currentTimeMillis() - start < timeoutMs) {
+                val rx = readByte(timeoutMs)
+                if (rx < 0) continue
+
+                // 1. Проверяем, не является ли байт нашим собственным эхо на K-Line
+                if (!gotEcho && rx == sentVal) {
+                    gotEcho = true
+                    continue // Эхо принято и отброшено, ждем ответ ЭБУ
+                }
+
+                // 2. Проверяем, является ли байт побитовой инверсией (~byte)
+                if (rx == compExpected) {
+                    // Успешное подтверждение от ЭБУ
+                    delay(3) // Межбайтная пауза ~3 мс по спецификации KWP1281
+                    return@withContext true
+                }
+            }
+            delay(5)
         }
-        return@withContext count
+        return@withContext false
     }
 
     /**
-     * Отправка байта с подавлением отражённого эхо K-Line
+     * Отправка завершающего байта блока 0x03 (не подтверждается инверсией)
      */
-    suspend fun writeByteAndDiscardEcho(b: Byte, timeoutMs: Int = 300) = withContext(Dispatchers.IO) {
+    suspend fun sendEndMarker(timeoutMs: Int = 300) = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext
         try {
-            p.write(byteArrayOf(b), timeoutMs)
-            // K-Line Loopback эхо: считываем и сбрасываем отражённый байт
-            readByte(100)
+            p.write(byteArrayOf(0x03), timeoutMs)
+            // Отбрасываем возможное loopback-эхо от 0x03
+            readByte(40)
+            delay(6) // Межблочная пауза ~5–8 мс по спецификации KWP1281
         } catch (t: Throwable) {}
     }
 
-    suspend fun writeBytesAndDiscardEcho(data: ByteArray, timeoutMs: Int = 500) = withContext(Dispatchers.IO) {
-        for (b in data) {
-            writeByteAndDiscardEcho(b, timeoutMs)
+    /**
+     * Отправка байта без подтверждения (для инверсии ~KW2 или подтверждения входящего байта)
+     */
+    suspend fun writeRawByte(b: Byte, timeoutMs: Int = 300) = withContext(Dispatchers.IO) {
+        val p = port ?: return@withContext
+        try {
+            p.write(byteArrayOf(b), timeoutMs)
+            // Отбрасываем собственное loopback-эхо
+            readByte(40)
+        } catch (t: Throwable) {}
+    }
+
+    fun clearBuffers() {
+        synchronized(rxQueue) {
+            rxQueue.clear()
         }
+        try {
+            port?.purgeHwBuffers(true, true)
+        } catch (t: Throwable) {}
     }
 
     fun close() {
         synchronized(rxQueue) {
             rxQueue.clear()
         }
+        try {
+            port?.setBreak(false)
+        } catch (t: Throwable) {}
         try {
             port?.close()
         } catch (t: Throwable) {}
@@ -367,6 +427,13 @@ import kotlinx.coroutines.withContext
 /**
  * Протокол VAG KWP1281 (ISO 9141-2) для ЭБУ Bosch Mono-Motronic 1.2.3 (3A0 907 311)
  * автомобилей VW Vento / Golf 3 / Passat B4 (двигатели 1.8 ADZ, AAM, ABS).
+ * 
+ * Архитектура построена по спецификации декомпилированного бинарника libkwp1281:
+ * - Фиксированная скорость 9600 бод (8N1).
+ * - Сквозной счетчик блоков (Block Counter), увеличивающийся на 1 для каждого блока.
+ * - Побайтовое подтверждение инверсией (~byte) для всех байт кроме 0x03.
+ * - Keep-Alive поток (блок ACK 0x09 каждые 500 мс) с мьютексом шины.
+ * - Корректное чтение кодов ошибок DTC тройками [код_hi][код_lo][статус].
  */
 class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
 
@@ -374,7 +441,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     var ecuPartNumber: String = ""
     var ecuComponent: String = ""
     var ecuExtra: String = ""
-    val negotiatedBaud: Int = 9600
+    var negotiatedBaud: Int = 9600
 
     private var isSessionActive = false
     private val busMutex = Mutex()
@@ -405,6 +472,10 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         )
     }
 
+    /**
+     * Подключение к ЭБУ двигателя (адрес 0x01).
+     * Проверяет скорость 9600 бод, а при необходимости выполняет автоматический фоллбек на 10400 бод.
+     */
     suspend fun connect(onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
         busMutex.withLock {
             try {
@@ -415,68 +486,20 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 ecuComponent = ""
                 ecuExtra = ""
 
-                onLog("--- Запуск сеанса KWP1281 (9600 бод) ---")
-
-                val sent = driver.send5BaudInitAddress(0x01, 9600, onLog)
-                if (!sent) return@withContext false
-
-                onLog("Ожидание синхробайта 0x55 от ЭБУ (до 5 с)...")
-                val syncStart = System.currentTimeMillis()
-                var syncFound = false
-                val foreignBytes = mutableListOf<String>()
-
-                while (System.currentTimeMillis() - syncStart < 5000) {
-                    val b = driver.readByte(300)
-                    if (b >= 0) {
-                        if (b == 0x55) {
-                            syncFound = true
-                            break
-                        } else {
-                            val hex = "0x%02X".format(b)
-                            foreignBytes.add(hex)
-                            onLog("Посторонний байт \${hex} вместо 0x55 (отброшен)")
-                        }
+                val speeds = listOf(9600, 10400)
+                for (speed in speeds) {
+                    onLog("--- Запуск сеанса KWP1281 ($speed бод) ---")
+                    if (tryConnectSpeed(speed, onLog)) {
+                        negotiatedBaud = speed
+                        isSessionActive = true
+                        startKeepAlive(onLog)
+                        onLog("Сеанс KWP1281 успешно установлен на $speed бод! ЭБУ готов к командам.")
+                        return@withContext true
                     }
+                    delay(300)
                 }
-
-                if (!syncFound) {
-                    val rxSummary = if (foreignBytes.isEmpty()) "линия молчит" else "принято: \${foreignBytes.joinToString(\" \")}"
-                    val err = driver.lastError?.let { " [Ошибка USB: \${it}]" } ?: ""
-                    onLog("Синхробайт 0x55 не обнаружен (\${rxSummary})\${err}.")
-                    return@withContext false
-                }
-
-                onLog("Синхробайт 0x55 успешно принят!")
-
-                val kb1 = driver.readByte(1000)
-                if (kb1 < 0) {
-                    onLog("Ошибка: таймаут чтения Keyword 1")
-                    return@withContext false
-                }
-                val kb2 = driver.readByte(1000)
-                if (kb2 < 0) {
-                    onLog("Ошибка: таймаут чтения Keyword 2")
-                    return@withContext false
-                }
-
-                val proto = ((kb2 and 0x7F) shl 7) + (kb1 and 0x7F)
-                onLog("Ключевые байты: 0x%02X 0x%02X -> KWP%d".format(kb1, kb2, proto))
-
-                delay(35)
-                val comp = ((kb2 xor 0xFF) and 0xFF).toByte()
-                driver.writeRawByte(comp, 300)
-                onLog("Отправлена инверсия ~KW2: 0x%02X".format(comp.toInt() and 0xFF))
-
-                val ok = readIdentificationBlocks(onLog)
-                if (ok) {
-                    isSessionActive = true
-                    startKeepAlive(onLog)
-                    onLog("Сеанс KWP1281 успешно установлен! ЭБУ готов к командам.")
-                    return@withContext true
-                } else {
-                    onLog("Не удалось завершить идентификацию ЭБУ.")
-                    return@withContext false
-                }
+                onLog("Подключение не удалось. Проверьте включение зажигания (положение ON) и контакты K-Line.")
+                return@withContext false
             } catch (t: Throwable) {
                 onLog("Исключение сессии KWP1281: \${t.message ?: t.javaClass.simpleName}")
                 return@withContext false
@@ -484,6 +507,73 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         }
     }
 
+    private suspend fun tryConnectSpeed(targetBaud: Int, onLog: (String) -> Unit): Boolean {
+        // 1. Посылка адреса 0x01 на 5 бод
+        val sent = driver.send5BaudInitAddress(0x01, targetBaud, onLog)
+        if (!sent) return false
+
+        // 2. Ожидание синхробайта 0x55 (таймаут до 3.5 с)
+        onLog("Ожидание синхробайта 0x55 от ЭБУ ($targetBaud бод, до 3.5 с)...")
+        val syncStart = System.currentTimeMillis()
+        var syncFound = false
+        val foreignBytes = mutableListOf<String>()
+
+        while (System.currentTimeMillis() - syncStart < 3500) {
+            val b = driver.readByte(250)
+            if (b >= 0) {
+                if (b == 0x55) {
+                    syncFound = true
+                    break
+                } else {
+                    val hex = "0x%02X".format(b)
+                    foreignBytes.add(hex)
+                    onLog("Байт линии: $hex (отброшен)")
+                }
+            }
+        }
+
+        if (!syncFound) {
+            val rxSummary = if (foreignBytes.isEmpty()) "линия молчит" else "принято: \${foreignBytes.joinToString(" ")}"
+            val err = driver.lastError?.let { " [USB: $it]" } ?: ""
+            onLog("Синхробайт 0x55 не обнаружен ($rxSummary)$err.")
+            return false
+        }
+
+        onLog("Синхробайт 0x55 успешно принят!")
+
+        // 3. Приём ключевых байтов KW1 и KW2 (таймаут 1000 мс)
+        val kb1 = driver.readByte(1000)
+        if (kb1 < 0) {
+            onLog("Ошибка: таймаут чтения Keyword 1")
+            return false
+        }
+        val kb2 = driver.readByte(1000)
+        if (kb2 < 0) {
+            onLog("Ошибка: таймаут чтения Keyword 2")
+            return false
+        }
+
+        val proto = ((kb2 and 0x7F) shl 7) + (kb1 and 0x7F)
+        onLog("Ключевые байты: 0x%02X 0x%02X -> KWP%d".format(kb1, kb2, proto))
+
+        // 4. Пауза 35 мс (Compat Mode) и отправка инверсии ~KW2
+        delay(35)
+        val comp = ((kb2 xor 0xFF) and 0xFF).toByte()
+        driver.writeRawByte(comp, 300)
+        onLog("Отправлена инверсия ~KW2: 0x%02X".format(comp.toInt() and 0xFF))
+
+        // 5. Чтение первого блока идентификации и ответ ACK
+        val ok = readIdentificationBlocks(onLog)
+        if (!ok) {
+            onLog("Не удалось завершить чтение паспортных данных ЭБУ.")
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Чтение блоков идентификации 0xF6 и подтверждение ACK 0x09
+     */
     private suspend fun readIdentificationBlocks(onLog: (String) -> Unit): Boolean {
         var blocksRead = 0
         while (blocksRead < 5) {
@@ -493,19 +583,25 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             if (block.title == 0xF6) {
                 val text = String(block.data, Charsets.US_ASCII).trim()
                 when (blocksRead) {
-                    1 -> { ecuPartNumber = text; onLog("Номер детали ЭБУ: \${text}") }
-                    2 -> { ecuComponent = text; onLog("Компонент: \${text}") }
-                    3 -> { ecuExtra = text; onLog("Кодировка/Дополнительно: \${text}") }
-                    else -> onLog("Инфо ЭБУ: \${text}")
+                    1 -> { ecuPartNumber = text; onLog("Номер детали ЭБУ: $text") }
+                    2 -> { ecuComponent = text; onLog("Компонент: $text") }
+                    3 -> { ecuExtra = text; onLog("Кодировка/Дополнительно: $text") }
+                    else -> onLog("Инфо ЭБУ: $text")
                 }
+                // Отвечаем блоком ACK (Title 0x09)
                 sendBlockInternal(0x09)
             } else if (block.title == 0x09) {
+                // ЭБУ завершил выдачу паспортных данных
                 return true
             }
         }
         return ecuPartNumber.isNotEmpty()
     }
 
+    /**
+     * Отправка блока KWP1281: [Length][Counter][Title][Data...][0x03]
+     * Все байты кроме 0x03 подтверждаются инверсией от ЭБУ.
+     */
     private suspend fun sendBlockInternal(title: Int, payload: ByteArray = ByteArray(0)): Boolean {
         blockCounter = (blockCounter + 1) and 0xFF
         val length = 3 + payload.size
@@ -517,6 +613,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             packet.add(b)
         }
 
+        // Побайтовая отправка с проверкой подтверждения инверсией
         for (b in packet) {
             val ack = driver.writeByteAndVerifyAck(b, 300, 4)
             if (!ack) {
@@ -524,26 +621,34 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             }
         }
 
+        // Завершающий маркер 0x03 (без подтверждения)
         driver.sendEndMarker(300)
         return true
     }
 
+    /**
+     * Приём блока KWP1281: чтение байта и немедленная отправка инверсии ~byte
+     */
     private suspend fun receiveBlockInternal(timeoutMs: Int = 1500): KwBlock? {
+        // 1. Длина блока (Length)
         val len = driver.readByte(timeoutMs)
         if (len < 3 || len > 32) return null
         sendByteAck(len)
         delay(3)
 
+        // 2. Счётчик блока (Counter)
         val counter = driver.readByte(400)
         if (counter < 0) return null
         sendByteAck(counter)
         delay(3)
 
+        // 3. Заголовок блока (Title)
         val title = driver.readByte(400)
         if (title < 0) return null
         sendByteAck(title)
         delay(3)
 
+        // 4. Байты данных (Length - 3)
         val dataLen = len - 3
         val data = ByteArray(dataLen)
         for (i in 0 until dataLen) {
@@ -554,8 +659,9 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             delay(3)
         }
 
+        // 5. Конечный маркер 0x03 (не подтверждается инверсией)
         val end = driver.readByte(400)
-        delay(6)
+        delay(6) // Межблочная пауза ~6 мс
 
         blockCounter = counter
         return KwBlock(len, counter, title, data)
@@ -566,6 +672,10 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         driver.writeRawByte(comp, 200)
     }
 
+    /**
+     * Keep-Alive поток: каждые ~0.5 с отправляет блок ACK 0x09,
+     * предотвращая разрыв сеанса по тайм-ауту со стороны ЭБУ.
+     */
     private fun startKeepAlive(onLog: (String) -> Unit) {
         stopKeepAliveInternal()
         keepAliveJob = CoroutineScope(Dispatchers.IO).launch {
@@ -599,13 +709,17 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 busMutex.withLock {
-                    sendBlockInternal(0x06)
+                    sendBlockInternal(0x06) // 0x06: Завершение сеанса
                     delay(50)
                 }
             } catch (t: Throwable) {}
         }
     }
 
+    /**
+     * Чтение кодов неисправностей DTC (Команда 0x07)
+     * В KWP1281 ошибки приходят в блоке 0xFC тройками: [код_hi][код_lo][статус]
+     */
     suspend fun readFaultCodes(onLog: (String) -> Unit): List<Pair<String, String>> = withContext(Dispatchers.IO) {
         val faults = mutableListOf<Pair<String, String>>()
         busMutex.withLock {
@@ -622,6 +736,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     blockCounter = block.counter
 
                     if (block.title == 0xFC) {
+                        // Тройки [код_hi][код_lo][статус]
                         var idx = 0
                         while (idx + 2 < block.data.size) {
                             val hi = block.data[idx].toInt() and 0xFF
@@ -632,13 +747,15 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                             val code = (hi shl 8) or lo
                             if (code != 0) {
                                 val dtc = "%05d".format(code)
-                                val desc = KNOWN_DTC_DESCRIPTIONS[dtc] ?: "Код неисправности VAG \${dtc}"
+                                val desc = KNOWN_DTC_DESCRIPTIONS[dtc] ?: "Код неисправности VAG $dtc"
                                 faults.add(Pair(dtc, desc))
-                                onLog("Обнаружена ошибка: \${dtc} — \${desc} (статус 0x%02X)".format(status))
+                                onLog("Обнаружена ошибка: $dtc — $desc (статус 0x%02X)".format(status))
                             }
                         }
+                        // Подтверждаем получение блока ошибок
                         sendBlockInternal(0x09)
                     } else if (block.title == 0x09) {
+                        // Конец списка ошибок или память пуста
                         sendBlockInternal(0x09)
                         break
                     } else {
@@ -653,6 +770,9 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         faults
     }
 
+    /**
+     * Стирание кодов неисправностей DTC (Команда 0x05)
+     */
     suspend fun clearFaultCodes(onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
         busMutex.withLock {
             try {
@@ -674,7 +794,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     return@withContext true
                 }
             } catch (t: Throwable) {
-                onLog("Ошибка стирания: \${t.message ?: t.javaClass.simpleName}")
+                onLog("Ошибка стирания ошибок: \${t.message ?: t.javaClass.simpleName}")
                 return@withContext false
             }
         }
@@ -962,14 +1082,23 @@ class MainActivity : AppCompatActivity() {
                     findUsbAdapter()
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    addLog("USB устройство отключено.")
-                    disconnectSession()
-                    foundDevice = null
-                    btnConnectEcu.isEnabled = false
-                    btnReadFaults.isEnabled = false
-                    btnClearFaults.isEnabled = false
-                    tvStatus.text = "Статус: USB отключен"
-                    tvDeviceInfo.text = "Подключите USB-OTG кабель"
+                    val currentList = usbManager?.deviceList
+                    val stillPresent = currentList?.values?.any {
+                        it.vendorId == 0x0403 || it.vendorId == 0x1A86 || it.vendorId == 0x10C4
+                    } == true
+                    if (!stillPresent) {
+                        addLog("USB устройство отключено.")
+                        disconnectSession()
+                        foundDevice = null
+                        btnConnectEcu.isEnabled = false
+                        btnReadFaults.isEnabled = false
+                        btnClearFaults.isEnabled = false
+                        tvStatus.text = "Статус: USB отключен"
+                        tvDeviceInfo.text = "Подключите USB-OTG кабель"
+                    } else {
+                        addLog("Переподключение адаптера...")
+                        findUsbAdapter()
+                    }
                 }
             }
         }
@@ -1116,28 +1245,33 @@ class MainActivity : AppCompatActivity() {
                 btnClearFaults.isEnabled = false
                 tvStatus.text = "Статус: Инициализация K-Line 5 бод..."
                 
-                disconnectSession()
-
-                val driver = Ftdi5BaudDriver(manager, dev)
-                if (driver.open(9600)) {
-                    kwDriver = driver
-                    val protocol = Kw1281Protocol(driver)
-                    kwProtocol = protocol
-                    val success = protocol.connect { msg -> addLog(msg) }
-                    if (success) {
-                        val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else "3A0 907 311"
-                        tvStatus.text = "ЭБУ подключен: \${pNum} (9600 бод)"
-                        btnConnectEcu.isEnabled = true
-                        btnReadFaults.isEnabled = true
-                        btnClearFaults.isEnabled = true
+                var driver = kwDriver
+                if (driver == null || !driver.isOpen) {
+                    disconnectSession()
+                    val newDriver = Ftdi5BaudDriver(manager, dev)
+                    if (newDriver.open(9600)) {
+                        kwDriver = newDriver
+                        driver = newDriver
                     } else {
-                        tvStatus.text = "Ошибка связи с ЭБУ"
+                        tvStatus.text = "Не удалось открыть USB порт"
+                        val err = newDriver.lastError ?: "Неизвестная ошибка"
+                        addLog("Ошибка открытия порта: $err")
                         btnConnectEcu.isEnabled = true
+                        return@launch
                     }
+                }
+
+                val protocol = Kw1281Protocol(driver)
+                kwProtocol = protocol
+                val success = protocol.connect { msg -> addLog(msg) }
+                if (success) {
+                    val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else "3A0 907 311"
+                    tvStatus.text = "ЭБУ подключен: $pNum (\${protocol.negotiatedBaud} бод)"
+                    btnConnectEcu.isEnabled = true
+                    btnReadFaults.isEnabled = true
+                    btnClearFaults.isEnabled = true
                 } else {
-                    tvStatus.text = "Не удалось открыть USB порт"
-                    val err = driver.lastError ?: "Неизвестная ошибка"
-                    addLog("Ошибка открытия порта: \${err}")
+                    tvStatus.text = "Ошибка связи с ЭБУ"
                     btnConnectEcu.isEnabled = true
                 }
             } catch (t: Throwable) {
@@ -1161,7 +1295,7 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     addLog("Всего обнаружено неисправностей: \${faults.size}")
                     for ((dtc, desc) in faults) {
-                        addLog("• \${dtc} — \${desc}")
+                        addLog("• $dtc — $desc")
                     }
                 }
             } catch (t: Throwable) {

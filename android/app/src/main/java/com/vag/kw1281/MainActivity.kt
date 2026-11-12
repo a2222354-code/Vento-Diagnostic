@@ -54,14 +54,23 @@ class MainActivity : AppCompatActivity() {
                     findUsbAdapter()
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    addLog("USB устройство отключено.")
-                    disconnectSession()
-                    foundDevice = null
-                    btnConnectEcu.isEnabled = false
-                    btnReadFaults.isEnabled = false
-                    btnClearFaults.isEnabled = false
-                    tvStatus.text = "Статус: USB отключен"
-                    tvDeviceInfo.text = "Подключите USB-OTG кабель"
+                    val currentList = usbManager?.deviceList
+                    val stillPresent = currentList?.values?.any {
+                        it.vendorId == 0x0403 || it.vendorId == 0x1A86 || it.vendorId == 0x10C4
+                    } == true
+                    if (!stillPresent) {
+                        addLog("USB устройство отключено.")
+                        disconnectSession()
+                        foundDevice = null
+                        btnConnectEcu.isEnabled = false
+                        btnReadFaults.isEnabled = false
+                        btnClearFaults.isEnabled = false
+                        tvStatus.text = "Статус: USB отключен"
+                        tvDeviceInfo.text = "Подключите USB-OTG кабель"
+                    } else {
+                        addLog("Переподключение адаптера...")
+                        findUsbAdapter()
+                    }
                 }
             }
         }
@@ -208,28 +217,33 @@ class MainActivity : AppCompatActivity() {
                 btnClearFaults.isEnabled = false
                 tvStatus.text = "Статус: Инициализация K-Line 5 бод..."
                 
-                disconnectSession()
-
-                val driver = Ftdi5BaudDriver(manager, dev)
-                if (driver.open(9600)) {
-                    kwDriver = driver
-                    val protocol = Kw1281Protocol(driver)
-                    kwProtocol = protocol
-                    val success = protocol.connect { msg -> addLog(msg) }
-                    if (success) {
-                        val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else "3A0 907 311"
-                        tvStatus.text = "ЭБУ подключен: $pNum (9600 бод)"
-                        btnConnectEcu.isEnabled = true
-                        btnReadFaults.isEnabled = true
-                        btnClearFaults.isEnabled = true
+                var driver = kwDriver
+                if (driver == null || !driver.isOpen) {
+                    disconnectSession()
+                    val newDriver = Ftdi5BaudDriver(manager, dev)
+                    if (newDriver.open(9600)) {
+                        kwDriver = newDriver
+                        driver = newDriver
                     } else {
-                        tvStatus.text = "Ошибка связи с ЭБУ"
+                        tvStatus.text = "Не удалось открыть USB порт"
+                        val err = newDriver.lastError ?: "Неизвестная ошибка"
+                        addLog("Ошибка открытия порта: $err")
                         btnConnectEcu.isEnabled = true
+                        return@launch
                     }
+                }
+
+                val protocol = Kw1281Protocol(driver)
+                kwProtocol = protocol
+                val success = protocol.connect { msg -> addLog(msg) }
+                if (success) {
+                    val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else "3A0 907 311"
+                    tvStatus.text = "ЭБУ подключен: $pNum (${protocol.negotiatedBaud} бод)"
+                    btnConnectEcu.isEnabled = true
+                    btnReadFaults.isEnabled = true
+                    btnClearFaults.isEnabled = true
                 } else {
-                    tvStatus.text = "Не удалось открыть USB порт"
-                    val err = driver.lastError ?: "Неизвестная ошибка"
-                    addLog("Ошибка открытия порта: $err")
+                    tvStatus.text = "Ошибка связи с ЭБУ"
                     btnConnectEcu.isEnabled = true
                 }
             } catch (t: Throwable) {
