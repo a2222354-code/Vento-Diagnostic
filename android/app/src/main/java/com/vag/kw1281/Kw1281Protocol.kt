@@ -10,6 +10,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Протокол VAG KWP1281 (ISO 9141-2) для диагностики блоков VW Vento / Golf 3:
@@ -36,6 +37,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     private val busMutex = Mutex()
     private var keepAliveJob: Job? = null
     private var consecutiveKeepAliveErrors = 0
+    private var preferredGroupReadCmd: Int? = null
 
     data class KwBlock(
         val length: Int,
@@ -49,7 +51,8 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val valueText: String,
         val formula: Int,
         val a: Int,
-        val b: Int
+        val b: Int,
+        val numericValue: Double = 0.0
     )
 
     data class LiveMeasurement(
@@ -78,6 +81,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     data class BasicSettingsResult(
         val success: Boolean,
         val measurement: LiveMeasurement? = null,
+        val isNak: Boolean = false,
         val message: String
     )
 
@@ -92,7 +96,9 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val startPermitted: Boolean,
         val ecuResponds: Boolean,
         val keyAuthorized: Boolean,
-        val keyCount: Int
+        val keyCount: Int,
+        val rawSummary: String = "",
+        val errorMessage: String? = null
     )
 
     data class DtcDetailedItem(
@@ -255,6 +261,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 stopKeepAliveInternal()
                 isSessionActive = false
                 consecutiveKeepAliveErrors = 0
+                preferredGroupReadCmd = null
                 blockCounter = 0
                 ecuPartNumber = ""
                 ecuComponent = ""
@@ -647,41 +654,109 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         return "Активен тест исполнителя (данные: $hex)"
     }
 
-    /**
-     * Чтение статуса иммобилайзера (Группа 001 блока 0x25)
-     */
-    suspend fun readImmobilizerStatus(onLog: (String) -> Unit): ImmoStatus? = withContext(Dispatchers.IO) {
-        val m = readMeasuringGroup(1, onLog) ?: return@withContext null
-        if (m.errorMessage != null || m.isUnsupportedNak) return@withContext null
-
-        // В группе 001 иммобилайзера 1H0 953 257 приходят 4 значения:
-        // Поле 1: разрешение пуска (0/1), Поле 2: ответ ЭБУ (0/1), Поле 3: ключ авторизован (0/1), Поле 4: кол-во ключей
-        if (m.fields.size >= 4) {
-            return@withContext ImmoStatus(
-                startPermitted = m.fields[0].b == 1,
-                ecuResponds = m.fields[1].b == 1,
-                keyAuthorized = m.fields[2].b == 1,
-                keyCount = m.fields[3].b
-            )
+    private fun extractImmoInt(f: MeasuredField): Int {
+        return when (f.formula) {
+            0x25, 0x10 -> f.b
+            0x0A -> if (f.b != 0 || f.a != 0) 1 else 0
+            0x11 -> {
+                val clean = f.valueText.trim()
+                clean.toIntOrNull() ?: if (clean.contains("1") || clean.equals("YES", true) || clean.equals("ДА", true)) 1 else 0
+            }
+            else -> {
+                val rounded = f.numericValue.roundToInt()
+                if (rounded != 0 || (f.a == 0 && f.b == 0)) rounded else if (f.b in 0..10) f.b else rounded
+            }
         }
-        if (m.rawValues.size >= 4) {
-            return@withContext ImmoStatus(
-                startPermitted = m.rawValues[0] == 1,
-                ecuResponds = m.rawValues[1] == 1,
-                keyAuthorized = m.rawValues[2] == 1,
-                keyCount = m.rawValues[3]
-            )
-        }
-        null
     }
 
     /**
-     * Чтение группы измерительных величин Live Data (Команда 0x08 или 0x29 для Группы 000)
+     * Чтение статуса иммобилайзера (Группа 001 блока 0x25: 1H0 953 257)
+     */
+    suspend fun readImmobilizerStatus(onLog: (String) -> Unit): ImmoStatus = withContext(Dispatchers.IO) {
+        val m1 = readMeasuringGroup(1, onLog)
+        if (m1 == null) {
+            return@withContext ImmoStatus(
+                startPermitted = false,
+                ecuResponds = false,
+                keyAuthorized = false,
+                keyCount = 0,
+                errorMessage = "Нет ответа от иммобилайзера на запрос Группы 001"
+            )
+        }
+        if (m1.errorMessage != null || m1.isUnsupportedNak) {
+            return@withContext ImmoStatus(
+                startPermitted = false,
+                ecuResponds = false,
+                keyAuthorized = false,
+                keyCount = 0,
+                errorMessage = m1.errorMessage ?: "Группа 001 не поддерживается"
+            )
+        }
+
+        val summary = if (m1.fields.isNotEmpty()) {
+            m1.fields.joinToString(" | ") { "${it.valueText} [0x%02X:%d,%d]".format(it.formula, it.a, it.b) }
+        } else {
+            m1.rawValues.joinToString(" ") { "%03d".format(it) }
+        }
+
+        if (m1.fields.size >= 4) {
+            return@withContext ImmoStatus(
+                startPermitted = extractImmoInt(m1.fields[0]) >= 1,
+                ecuResponds = extractImmoInt(m1.fields[1]) >= 1,
+                keyAuthorized = extractImmoInt(m1.fields[2]) >= 1,
+                keyCount = extractImmoInt(m1.fields[3]),
+                rawSummary = summary
+            )
+        }
+
+        if (m1.fields.size == 3) {
+            // На некоторых прошивках 1H0 953 257 число ключей или таймер блокировки в Группе 002
+            val m2 = readMeasuringGroup(2, onLog)
+            val keyCnt = if (m2 != null && m2.errorMessage == null && m2.fields.isNotEmpty()) {
+                extractImmoInt(m2.fields.last())
+            } else {
+                0
+            }
+            return@withContext ImmoStatus(
+                startPermitted = extractImmoInt(m1.fields[0]) >= 1,
+                ecuResponds = extractImmoInt(m1.fields[1]) >= 1,
+                keyAuthorized = extractImmoInt(m1.fields[2]) >= 1,
+                keyCount = keyCnt,
+                rawSummary = summary
+            )
+        }
+
+        if (m1.rawValues.size >= 4) {
+            return@withContext ImmoStatus(
+                startPermitted = m1.rawValues[0] >= 1,
+                ecuResponds = m1.rawValues[1] >= 1,
+                keyAuthorized = m1.rawValues[2] >= 1,
+                keyCount = m1.rawValues[3],
+                rawSummary = summary
+            )
+        }
+
+        ImmoStatus(
+            startPermitted = false,
+            ecuResponds = false,
+            keyAuthorized = false,
+            keyCount = 0,
+            rawSummary = summary,
+            errorMessage = "Нестандартный формат Группы 001 ($summary)"
+        )
+    }
+
+    /**
+     * Чтение группы измерительных величин Live Data (Команда 0x29 / 0x08)
      */
     suspend fun readMeasuringGroup(group: Int = 1, onLog: (String) -> Unit): LiveMeasurement? = withContext(Dispatchers.IO) {
         busMutex.withLock {
             readMeasuringGroupUnlocked(group, onLog)
         }
+    }
+
+    private fun isMeasuringBlockTitle(title: Int): Boolean {
+        return title == 0xE7 || title == 0xF4 || title == 0x02 || title == 0xFE
     }
 
     private suspend fun readMeasuringGroupUnlocked(group: Int, onLog: (String) -> Unit): LiveMeasurement? {
@@ -690,36 +765,58 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 return LiveMeasurement(group = group, errorMessage = "Сеанс связи закрыт")
             }
 
-            var sent = sendBlockInternal(0x08, byteArrayOf(group.toByte()))
-            if (!sent) {
-                return LiveMeasurement(group = group, errorMessage = "Нет ответа шины на запрос группы %03d".format(group))
+            if (group == 0) {
+                // Группа 000: пробуем 0x29 без аргументов, 0x29 [0x00] и 0x08 [0x00]
+                val attempts: List<Pair<Int, ByteArray>> = listOf(
+                    0x29 to ByteArray(0),
+                    0x29 to byteArrayOf(0x00),
+                    0x08 to byteArrayOf(0x00)
+                )
+                var lastTitle = -1
+                for ((cmd, payload) in attempts) {
+                    if (!sendBlockInternal(cmd, payload)) continue
+                    val reply = receiveBlockInternal(2000) ?: continue
+                    lastTitle = reply.title
+                    if (isMeasuringBlockTitle(reply.title)) {
+                        return parseMeasuringBlock(reply.data, 0)
+                    }
+                }
+                if (lastTitle == 0x0A) {
+                    return LiveMeasurement(group = 0, isUnsupportedNak = true, errorMessage = "Группа 000 отклонена (NAK 0x0A)")
+                }
+                return LiveMeasurement(group = 0, errorMessage = "Нет ответа ЭБУ на запрос Группы 000")
             }
 
-            var reply = receiveBlockInternal(2000)
+            val cmdsToTry = preferredGroupReadCmd?.let { listOf(it) } ?: listOf(0x29, 0x08)
+            var lastReplyTitle = -1
+            var anyReplyReceived = false
 
-            // Для Группы 000 старые ЭБУ Bosch Mono-Motronic используют команду 0x29 без аргументов
-            if (group == 0 && (reply == null || reply.title == 0x0A)) {
-                sent = sendBlockInternal(0x29)
-                if (sent) {
-                    reply = receiveBlockInternal(2000)
+            for (cmd in cmdsToTry) {
+                if (!sendBlockInternal(cmd, byteArrayOf(group.toByte()))) continue
+                val reply = receiveBlockInternal(2000) ?: continue
+                anyReplyReceived = true
+                lastReplyTitle = reply.title
+
+                if (isMeasuringBlockTitle(reply.title)) {
+                    preferredGroupReadCmd = cmd
+                    return parseMeasuringBlock(reply.data, group)
                 }
             }
 
-            if (reply == null) {
+            if (!anyReplyReceived) {
                 return LiveMeasurement(group = group, errorMessage = "Таймаут чтения группы %03d".format(group))
             }
 
-            return when (reply.title) {
-                0xE7, 0xF4, 0x02 -> parseMeasuringBlock(reply.data, group)
+            return when (lastReplyTitle) {
                 0x0A -> LiveMeasurement(
                     group = group,
                     isUnsupportedNak = true,
-                    errorMessage = "Группа %03d не поддерживается ЭБУ (NAK 0x0A)".format(group)
+                    errorMessage = "Группа %03d не поддерживается блоком (NAK 0x0A)".format(group)
                 )
                 0x09 -> LiveMeasurement(group = group, errorMessage = "Группа %03d: пустой ответ (0x09)".format(group))
                 else -> LiveMeasurement(
                     group = group,
-                    errorMessage = "Неожиданный блок 0x%02X на группу %03d".format(reply.title, group)
+                    errorMessage = "Неожиданный блок 0x%02X на группу %03d".format(lastReplyTitle, group)
                 )
             }
         } catch (t: Throwable) {
@@ -729,7 +826,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     }
 
     /**
-     * Базовые установки (Команда 0x28 или 0x11 для Группы 000)
+     * Базовые установки (Команда 0x28 [group], для ранних блоков фоллбек 0x28 без аргументов / 0x11)
      */
     suspend fun enterBasicSettings(group: Int = 0, onLog: (String) -> Unit): BasicSettingsResult = withContext(Dispatchers.IO) {
         busMutex.withLock {
@@ -738,48 +835,72 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     return@withContext BasicSettingsResult(false, message = "Сеанс связи с ЭБУ не активен.")
                 }
 
-                var sent = sendBlockInternal(0x28, byteArrayOf(group.toByte()))
-                if (!sent) {
-                    return@withContext BasicSettingsResult(false, message = "Ошибка передачи команды Базовых установок (0x28).")
+                val attempts: MutableList<Pair<Int, ByteArray>> = mutableListOf(
+                    0x28 to byteArrayOf(group.toByte())
+                )
+                if (group == 0) {
+                    attempts.add(0x28 to ByteArray(0))
+                    attempts.add(0x11 to ByteArray(0))
                 }
 
-                var reply = receiveBlockInternal(2500)
+                var sawNak = false
+                var lastTitle = -1
 
-                // Фоллбек на команду 0x11 (Базовые установки группы 000 на ранних Bosch Mono-Motronic 1.2.3)
-                if (group == 0 && (reply == null || reply.title == 0x0A)) {
-                    sent = sendBlockInternal(0x11)
-                    if (sent) {
-                        reply = receiveBlockInternal(2500)
+                for ((attemptIdx, pair) in attempts.withIndex()) {
+                    val (cmd, payload) = pair
+                    if (attemptIdx > 0) delay(50)
+                    if (!sendBlockInternal(cmd, payload)) continue
+                    val reply = receiveBlockInternal(2000) ?: continue
+                    lastTitle = reply.title
+
+                    when {
+                        isMeasuringBlockTitle(reply.title) -> {
+                            val m = parseMeasuringBlock(reply.data, group)
+                            return@withContext BasicSettingsResult(
+                                success = true,
+                                measurement = m,
+                                message = "Базовые установки группы %03d активны!".format(group)
+                            )
+                        }
+                        reply.title == 0x09 -> {
+                            return@withContext BasicSettingsResult(
+                                success = true,
+                                measurement = LiveMeasurement(group = group),
+                                message = "Режим базовых установок подтверждён ЭБУ (0x09)."
+                            )
+                        }
+                        reply.title == 0xFC -> {
+                            return@withContext BasicSettingsResult(
+                                success = false,
+                                isNak = true,
+                                message = "ЭБУ не пускает в Базовые установки (в памяти активны ошибки 0xFC). Прочитайте и сотрите ошибки (07 → 05)."
+                            )
+                        }
+                        reply.title == 0x0A -> {
+                            sawNak = true
+                        }
                     }
                 }
 
-                if (reply == null) {
-                    return@withContext BasicSettingsResult(false, message = "Таймаут ответа ЭБУ на Базовые установки (0x28 / 0x11).")
+                if (sawNak) {
+                    return@withContext BasicSettingsResult(
+                        success = false,
+                        isNak = true,
+                        message = "ЭБУ отклонил Базовые установки группы %03d (NAK 0x0A).".format(group)
+                    )
                 }
 
-                return@withContext when (reply.title) {
-                    0xE7, 0xF4, 0x02 -> {
-                        val m = parseMeasuringBlock(reply.data, group)
-                        BasicSettingsResult(
-                            success = true,
-                            measurement = m,
-                            message = "Базовые установки группы %03d активны!".format(group)
-                        )
-                    }
-                    0x09 -> BasicSettingsResult(
-                        success = true,
-                        measurement = LiveMeasurement(group = group),
-                        message = "Режим базовых установок подтверждён ЭБУ (0x09)."
-                    )
-                    0x0A -> BasicSettingsResult(
+                if (lastTitle >= 0) {
+                    return@withContext BasicSettingsResult(
                         success = false,
-                        message = "ЭБУ отклонил Базовые установки (NAK 0x0A).\n• Для Группы 000/001 двигатель должен быть заведён на ХХ и прогрет (>80°C), педаль газа отпущена."
-                    )
-                    else -> BasicSettingsResult(
-                        success = false,
-                        message = "Неожиданный ответ ЭБУ: Title 0x%02X".format(reply.title)
+                        message = "Неожиданный ответ ЭБУ на Базовые установки: Title 0x%02X".format(lastTitle)
                     )
                 }
+
+                BasicSettingsResult(
+                    success = false,
+                    message = "Таймаут ответа ЭБУ на Базовые установки (0x28)."
+                )
             } catch (t: Throwable) {
                 BasicSettingsResult(false, message = "Ошибка входа в Базовые установки: ${t.message ?: t.javaClass.simpleName}")
             }
@@ -898,21 +1019,27 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             val lambdaRaw = raw[4]
             val batteryRaw = raw[8]
 
-            val coolantC = (coolantRaw * 0.65 - 30.0).toInt()
-            val rpm = if (rpmRaw <= 45) rpmRaw * 25 else rpmRaw * 10
-            val lambdaV = (lambdaRaw * 0.005).let { "%.2f".format(it).replace(',', '.').toDoubleOrNull() }
+            // На Mono-Motronic 1.2.3 ДТОЖ в группе 000 может быть прямым (>=60 при прогреве) или инверсным NTC (<=45 при 85-100°C)
+            val coolantC = if (coolantRaw > 60) {
+                (coolantRaw * 0.65 - 30.0).toInt()
+            } else {
+                (115.0 - coolantRaw * 1.4).toInt()
+            }
+            val rpm = rpmRaw * 25
+            // Окно 5 в группе 000 Mono-Motronic — интегратор лямбда-регулирования (центр 128 = 0%)
+            val lambdaCorr = ((lambdaRaw - 128) * 100.0 / 128.0).let { "%.1f".format(it).replace(',', '.').toDoubleOrNull() }
             val throttleAngle = (throttleRaw * 0.35).let { "%.1f".format(it).replace(',', '.').toDoubleOrNull() }
             val batteryV = (batteryRaw * 0.08).let { "%.1f".format(it).replace(',', '.').toDoubleOrNull() }
 
             val fields = raw.mapIndexed { i, v ->
-                MeasuredField(i + 1, "%03d".format(v), 0, 0, v)
+                MeasuredField(i + 1, "%03d".format(v), 0, 0, v, v.toDouble())
             }
 
             return LiveMeasurement(
                 group = group,
                 rpm = rpm,
                 coolantTemp = coolantC,
-                lambdaVoltage = lambdaV,
+                lambdaCorrection = lambdaCorr,
                 throttleAngle = throttleAngle,
                 batteryVoltage = batteryV,
                 rawValues = raw,
@@ -941,7 +1068,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             idx += 3
 
             val decoded = decodeFormula(formula, a, b)
-            fields.add(MeasuredField(itemNum, decoded.displayText, formula, a, b))
+            fields.add(MeasuredField(itemNum, decoded.displayText, formula, a, b, decoded.numeric))
 
             when (decoded.kind) {
                 FieldKind.RPM -> if (parsedRpm == null) parsedRpm = decoded.numeric.toInt()
@@ -970,12 +1097,25 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     }
                 }
                 FieldKind.LOAD_PCT -> {
-                    if (group == 3 && itemNum == 2 && parsedThrottle == null) {
-                        // Если угол отдельно не пришёл, но есть нагрузка дросселя
+                    // В группе 001 / 005 поле 3 у Mono-Motronic может передавать лямбда-коррекцию в %
+                    if ((group == 1 || group == 5) && itemNum == 3 && parsedLambdaCorr == null) {
+                        parsedLambdaCorr = decoded.numeric
                     }
                 }
                 FieldKind.INJ_MS -> parsedInjMs = decoded.numeric
-                else -> {}
+                else -> {
+                    // Запасная интерпретация по стандартной позиции поля Группы 001 / 005,
+                    // если ЭБУ прислал нестандартный код формулы
+                    if (group == 1 && itemNum == 2 && parsedCoolantTemp == null && decoded.numeric in -40.0..140.0) {
+                        parsedCoolantTemp = decoded.numeric.toInt()
+                    } else if ((group == 1 || group == 5) && itemNum == 3 && parsedLambdaV == null && parsedLambdaCorr == null) {
+                        if (decoded.numeric in 0.0..1.5) {
+                            parsedLambdaV = decoded.numeric
+                        } else if (decoded.numeric in -50.0..150.0) {
+                            parsedLambdaCorr = decoded.numeric
+                        }
+                    }
+                }
             }
             itemNum++
         }
@@ -1028,7 +1168,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 val v = a * (b - 100) * 0.1
                 DecodedFormula(v, "%.1f °C".format(v), FieldKind.TEMP)
             }
-            0x06, 0x15, 0x42 -> {
+            0x06, 0x15, 0x2B, 0x42 -> {
                 val v = 0.001 * a * b
                 DecodedFormula(v, "%.2f В".format(v), FieldKind.VOLTAGE)
             }
@@ -1044,9 +1184,17 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 val v = (b - 127) * 0.02 * a
                 DecodedFormula(v, "%.1f°".format(v), FieldKind.ANGLE)
             }
+            0x0A -> {
+                val txt = if (b == 0) "НЕТ / Хол." else "ДА / Прогр."
+                DecodedFormula(b.toDouble(), txt, FieldKind.OTHER)
+            }
             0x0B -> {
                 val v = 0.0001 * a * b + 0.5
                 DecodedFormula(v, "%.3f λ".format(v), FieldKind.LAMBDA_PCT)
+            }
+            0x0D -> {
+                val v = (b - 127) * 0.001 * a
+                DecodedFormula(v, "%.2f".format(v), FieldKind.OTHER)
             }
             0x0F -> {
                 val v = 0.01 * a * b
@@ -1055,6 +1203,20 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             0x10 -> {
                 val bin = Integer.toBinaryString(b).padStart(8, '0')
                 DecodedFormula(b.toDouble(), bin, FieldKind.BITS)
+            }
+            0x11 -> {
+                val c1 = if (a in 32..126) a.toChar() else ' '
+                val c2 = if (b in 32..126) b.toChar() else ' '
+                val txt = "$c1$c2".trim().ifEmpty { "$b" }
+                DecodedFormula(txt.toDoubleOrNull() ?: b.toDouble(), txt, FieldKind.OTHER)
+            }
+            0x12 -> {
+                val v = 0.04 * a * b
+                DecodedFormula(v, "%.0f мбар".format(v), FieldKind.OTHER)
+            }
+            0x13 -> {
+                val v = 0.01 * a * b
+                DecodedFormula(v, "%.2f л".format(v), FieldKind.OTHER)
             }
             0x14 -> {
                 val v = a * (b - 128) / 128.0
@@ -1067,6 +1229,10 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             0x17 -> {
                 val v = (b / 256.0) * a
                 DecodedFormula(v, "%.1f %%".format(v), FieldKind.LOAD_PCT)
+            }
+            0x18 -> {
+                val v = 0.001 * a * b
+                DecodedFormula(v, "%.2f А".format(v), FieldKind.OTHER)
             }
             0x1A -> {
                 val v = (b - a).toDouble()
@@ -1084,13 +1250,83 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 val v = (b / 2560.0) * a
                 DecodedFormula(v, "%.1f °C".format(v), FieldKind.TEMP)
             }
+            0x20 -> {
+                val v = (b - 128).toDouble()
+                DecodedFormula(v, "%.0f".format(v), FieldKind.OTHER)
+            }
             0x21 -> {
                 val v = if (a == 0) 100.0 * b else (100.0 * b / a)
                 DecodedFormula(v, "%.1f %%".format(v), FieldKind.LOAD_PCT)
             }
-            0x2B -> {
-                val v = a * b * 0.001
-                DecodedFormula(v, "%.2f В".format(v), FieldKind.VOLTAGE)
+            0x22 -> {
+                val v = (b - 128) * 0.01 * a
+                DecodedFormula(v, "%.1f %%".format(v), FieldKind.LAMBDA_PCT)
+            }
+            0x25 -> {
+                DecodedFormula(b.toDouble(), "$b", FieldKind.OTHER)
+            }
+            0x26 -> {
+                val v = (b - 128) * 0.001 * a
+                DecodedFormula(v, "%.2f".format(v), FieldKind.OTHER)
+            }
+            0x27 -> {
+                val v = (b / 256.0) * a
+                DecodedFormula(v, "%.1f мг".format(v), FieldKind.OTHER)
+            }
+            0x28 -> {
+                val v = b * 0.1 - a
+                DecodedFormula(v, "%.1f".format(v), FieldKind.OTHER)
+            }
+            0x2C -> {
+                DecodedFormula(a.toDouble(), "%02d:%02d".format(a, b), FieldKind.OTHER)
+            }
+            0x2D, 0x37 -> {
+                val v = if (formula == 0x2D) 0.01 * a * b else 0.005 * a * b
+                DecodedFormula(v, "%.2f".format(v), FieldKind.OTHER)
+            }
+            0x2E -> {
+                val v = (a * b - 3200) * 0.0027
+                DecodedFormula(v, "%.1f°".format(v), FieldKind.ANGLE)
+            }
+            0x2F -> {
+                val v = (b - 128) * a.toDouble()
+                DecodedFormula(v, "%.0f мс".format(v), FieldKind.INJ_MS)
+            }
+            0x31 -> {
+                val v = (b / 4.0) * a * 0.1
+                DecodedFormula(v, "%.1f".format(v), FieldKind.OTHER)
+            }
+            0x33 -> {
+                val v = ((b - 128) / 255.0) * a
+                DecodedFormula(v, "%.1f %%".format(v), FieldKind.LAMBDA_PCT)
+            }
+            0x34 -> {
+                val v = b * 0.02 * a - a
+                DecodedFormula(v, "%.1f".format(v), FieldKind.OTHER)
+            }
+            0x35 -> {
+                val v = (b - 128) * 1.4222 + 0.006 * a
+                DecodedFormula(v, "%.1f".format(v), FieldKind.OTHER)
+            }
+            0x36 -> {
+                val v = (a * 256 + b).toDouble()
+                DecodedFormula(v, "${a * 256 + b}", FieldKind.OTHER)
+            }
+            0x3B -> {
+                val v = (a * 256 + b) / 512.0
+                DecodedFormula(v, "%.3f".format(v), FieldKind.OTHER)
+            }
+            0x3E -> {
+                val v = 0.256 * a * b
+                DecodedFormula(v, "%.1f".format(v), FieldKind.OTHER)
+            }
+            0x40 -> {
+                val v = (a + b).toDouble()
+                DecodedFormula(v, "%.0f".format(v), FieldKind.OTHER)
+            }
+            0x41 -> {
+                val v = 0.01 * a * (b - 127)
+                DecodedFormula(v, "%.1f°".format(v), FieldKind.ANGLE)
             }
             0x43 -> {
                 val v = 0.1 * a * b
@@ -1098,7 +1334,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             }
             else -> {
                 val v = a * 0.1 * b
-                DecodedFormula(v, "$a / $b", FieldKind.OTHER)
+                DecodedFormula(v, "0x%02X(%d/%d)".format(formula, a, b), FieldKind.OTHER)
             }
         }
     }

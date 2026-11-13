@@ -201,7 +201,9 @@ class MainActivity : AppCompatActivity() {
             btnConnectEcu.setOnClickListener { onConnectButtonClicked() }
             btnReadFaults.setOnClickListener { readFaultCodes() }
             btnClearFaults.setOnClickListener { clearFaultCodes() }
-            btnMeasuring.setOnClickListener { toggleLiveMeasuring() }
+            btnMeasuring.setOnClickListener {
+                if (selectedEcuAddress == 0x25) refreshImmobilizerStatus() else toggleLiveMeasuring()
+            }
             btnActuatorStart.setOnClickListener { startActuatorTest() }
             btnActuatorNext.setOnClickListener { nextActuatorTest() }
             btnActuatorStop.setOnClickListener { stopActuatorTest() }
@@ -264,6 +266,10 @@ class MainActivity : AppCompatActivity() {
             layoutLiveData.visibility = View.VISIBLE
             layoutImmoStatus.visibility = View.GONE
             rowEngineDiagnostics.visibility = View.VISIBLE
+            btnMeasuring.visibility = View.VISIBLE
+            btnMeasuring.text = "ИЗМЕРЕНИЯ (08)"
+            btnMeasuring.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#8B5CF6"))
+            btnActuatorStart.visibility = View.VISIBLE
             btnBasicSettings.visibility = View.VISIBLE
             btnAdaptationOpen.visibility = View.VISIBLE
             tvAdaptHint.text = "Канал 00: сброс выученных адаптаций смеси/РХХ (Сохранить 0)"
@@ -276,7 +282,14 @@ class MainActivity : AppCompatActivity() {
             tvDeviceInfo.text = "Блок: Иммобилайзер Wegfahrsicherung (1H0 953 257)"
             layoutLiveData.visibility = View.GONE
             layoutImmoStatus.visibility = View.VISIBLE
-            rowEngineDiagnostics.visibility = View.GONE
+            tvImmoKeyStatus.text = "• Транспондер ключа: Ожидание опроса..."
+            tvImmoStartStatus.text = "• Разрешение пуска двигателя: Не проверено"
+            tvImmoKeyCount.text = "• Ключей обучено в памяти: ---"
+            rowEngineDiagnostics.visibility = View.VISIBLE
+            btnMeasuring.visibility = View.VISIBLE
+            btnMeasuring.text = "СТАТУС ИММО (08)"
+            btnMeasuring.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#8B5CF6"))
+            btnActuatorStart.visibility = View.GONE
             btnBasicSettings.visibility = View.GONE
             btnAdaptationOpen.visibility = View.VISIBLE
             tvAdaptHint.text = "Канал 00: привязка ЭБУ к иммобилайзеру (Сохранить 0) • Канал 01: кол-во ключей"
@@ -474,23 +487,44 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun refreshImmobilizerStatus() {
+        val protocol = kwProtocol ?: run {
+            setResultText("Сначала подключитесь к иммобилайзеру.")
+            return
+        }
+        lifecycleScope.launch {
+            btnMeasuring.isEnabled = false
+            setResultText("Опрос состояния иммобилайзера и ключей (Группа 001 / 002)...")
+            checkImmobilizerStatus(protocol)
+            btnMeasuring.isEnabled = true
+        }
+    }
+
     private suspend fun checkImmobilizerStatus(protocol: Kw1281Protocol) {
         val status = protocol.readImmobilizerStatus { }
-        if (status != null) {
+        if (status.errorMessage == null) {
             tvImmoKeyStatus.text = "• Транспондер ключа: ${if (status.keyAuthorized) "✅ Распознан (ID33 OK)" else "❌ ОШИБКА (Чип не прочитан)"}"
             tvImmoStartStatus.text = "• Разрешение пуска двигателя: ${if (status.startPermitted) "✅ РАЗРЕШЁН" else "❌ ЗАБЛОКИРОВАН (заглохнет через 1 сек)"}"
             tvImmoKeyCount.text = "• Ключей обучено в памяти: ${status.keyCount} шт."
 
-            setResultText("Блок иммобилайзера 1H0 953 257 подключен!\n\n" +
+            setResultText("Блок иммобилайзера ${protocol.ecuPartNumber.ifEmpty { "1H0 953 257" }} подключен!\n\n" +
                     "ДИАГНОСТИКА КЛЮЧА И СИСТЕМЫ ПУСКА:\n" +
                     "• Разрешение запуска: ${if (status.startPermitted) "РАЗРЕШЕНО (ЭБУ не блокируется)" else "ЗАПРЕЩЕНО (Блокировка мотора)"}\n" +
                     "• Ответ ЭБУ двигателя: ${if (status.ecuResponds) "Есть связь по W-Line" else "Нет связи с моторным ЭБУ"}\n" +
                     "• Транспондер чипа: ${if (status.keyAuthorized) "Авторизован" else "Не авторизован / Слабый сигнал катушки"}\n" +
-                    "• Ключей прописано: ${status.keyCount}\n\n" +
+                    "• Ключей прописано: ${status.keyCount} шт.\n" +
+                    (if (status.rawSummary.isNotEmpty()) "• Данные группы 001: ${status.rawSummary}\n\n" else "\n") +
                     "Для синхронизации ЭБУ с иммобилайзером откройте «АДАПТАЦИЯ (10)» → Канал 00 → «СОХРАНИТЬ» (значение 0).")
         } else {
-            setResultText("Иммобилайзер подключен. Номер блока: ${protocol.ecuPartNumber}\n" +
-                    "Вы можете прочитать ошибки (07) или открыть Адаптацию (10).")
+            tvImmoKeyStatus.text = "• Транспондер ключа: ⚠️ Не прочитан"
+            tvImmoStartStatus.text = "• Разрешение пуска двигателя: ⚠️ ${status.errorMessage}"
+            tvImmoKeyCount.text = "• Ключей обучено в памяти: ---"
+
+            setResultText("Иммобилайзер подключен (${protocol.ecuPartNumber.ifEmpty { "1H0 953 257" }}).\n\n" +
+                    "⚠️ Не удалось прочитать статус ключей (Группа 001):\n" +
+                    "Причина: ${status.errorMessage}\n" +
+                    (if (status.rawSummary.isNotEmpty()) "Ответ блока: ${status.rawSummary}\n\n" else "\n") +
+                    "Нажмите «СТАТУС ИММО (08)» для повторного опроса или «ОШИБКИ (07)».")
         }
     }
 
@@ -576,7 +610,10 @@ class MainActivity : AppCompatActivity() {
 
         liveStreamJob = lifecycleScope.launch {
             var useGroupZeroOnly = false
-            var checkGroup5ForLambda = false
+            var g3Supported = true
+            var g4Supported = true
+            var g5Supported = true
+            var g2Supported = true
             var consecutiveErrors = 0
             var cycleCount = 0
 
@@ -595,6 +632,8 @@ class MainActivity : AppCompatActivity() {
                     var lastErr: String? = null
                     var g1Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g3Fields = emptyList<Kw1281Protocol.MeasuredField>()
+                    var g4Fields = emptyList<Kw1281Protocol.MeasuredField>()
+                    var g5Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g0Raw = emptyList<Int>()
 
                     if (!useGroupZeroOnly) {
@@ -609,59 +648,82 @@ class MainActivity : AppCompatActivity() {
                                 m1.lambdaVoltage?.let { lastLambdaV = it }
                                 m1.lambdaCorrection?.let { lastLambdaCorr = it }
                                 g1Fields = m1.fields
-                                if (cycleCount == 0 && m1.lambdaVoltage == null) {
-                                    checkGroup5ForLambda = true
-                                }
                             } else {
                                 lastErr = m1.errorMessage
                             }
                         }
 
-                        if (!useGroupZeroOnly && isActive && protocol.isSessionActive) {
-                            delay(60)
+                        if (!useGroupZeroOnly && g3Supported && isActive && protocol.isSessionActive) {
+                            delay(50)
                             val m3 = protocol.readMeasuringGroup(3) { }
                             if (m3 != null && !m3.isUnsupportedNak && m3.errorMessage == null) {
                                 gotValid = true
                                 m3.rpm?.let { if (lastRpm == null) lastRpm = it }
+                                m3.coolantTemp?.let { if (lastTemp == null) lastTemp = it }
                                 m3.throttleAngle?.let { lastThrottle = it }
                                 m3.intakeAirTemp?.let { lastAirTemp = it }
                                 g3Fields = m3.fields
+                            } else if (m3?.isUnsupportedNak == true) {
+                                g3Supported = false
                             }
                         }
 
-                        if (!useGroupZeroOnly && checkGroup5ForLambda && cycleCount % 2 == 0 && isActive && protocol.isSessionActive) {
-                            delay(60)
+                        // Если ДТОЖ или Лямбда не получены из Группы 001 — добираем из Групп 004 и 005
+                        if (!useGroupZeroOnly && g4Supported && (lastTemp == null || cycleCount == 0) && isActive && protocol.isSessionActive) {
+                            delay(50)
+                            val m4 = protocol.readMeasuringGroup(4) { }
+                            if (m4 != null && !m4.isUnsupportedNak && m4.errorMessage == null) {
+                                gotValid = true
+                                m4.coolantTemp?.let { lastTemp = it }
+                                m4.intakeAirTemp?.let { if (lastAirTemp == null) lastAirTemp = it }
+                                g4Fields = m4.fields
+                            } else if (m4?.isUnsupportedNak == true) {
+                                g4Supported = false
+                            }
+                        }
+
+                        if (!useGroupZeroOnly && g5Supported && (lastLambdaV == null || (lastLambdaCorr == null && cycleCount % 2 == 0)) && isActive && protocol.isSessionActive) {
+                            delay(50)
                             val m5 = protocol.readMeasuringGroup(5) { }
                             if (m5 != null && !m5.isUnsupportedNak && m5.errorMessage == null) {
+                                gotValid = true
+                                m5.coolantTemp?.let { if (lastTemp == null) lastTemp = it }
                                 m5.lambdaVoltage?.let { lastLambdaV = it }
-                                m5.lambdaCorrection?.let { if (lastLambdaCorr == null) lastLambdaCorr = it }
+                                m5.lambdaCorrection?.let { lastLambdaCorr = it }
+                                g5Fields = m5.fields
                             } else if (m5?.isUnsupportedNak == true) {
-                                checkGroup5ForLambda = false
+                                g5Supported = false
                             }
                         }
 
-                        if (!useGroupZeroOnly && cycleCount % 4 == 0 && isActive && protocol.isSessionActive) {
-                            delay(60)
+                        if (!useGroupZeroOnly && g2Supported && cycleCount % 4 == 0 && isActive && protocol.isSessionActive) {
+                            delay(50)
                             val m2 = protocol.readMeasuringGroup(2) { }
                             if (m2 != null && !m2.isUnsupportedNak && m2.errorMessage == null) {
                                 m2.batteryVoltage?.let { lastBatteryV = it }
                                 m2.injectionTimeMs?.let { lastInjMs = it }
                                 m2.intakeAirTemp?.let { lastAirTemp = it }
+                            } else if (m2?.isUnsupportedNak == true) {
+                                g2Supported = false
                             }
                         }
                     }
 
-                    if (useGroupZeroOnly && isActive && protocol.isSessionActive) {
+                    // Фоллбек на Группу 000 (10 байт Mono-Motronic): если Группа 001 отклонена ИЛИ ДТОЖ/Лямбда не удалось прочитать из групп 001..005
+                    val needGroupZeroFallback = useGroupZeroOnly || lastTemp == null || (lastLambdaV == null && lastLambdaCorr == null)
+                    if (needGroupZeroFallback && isActive && protocol.isSessionActive) {
+                        delay(50)
                         val m0 = protocol.readMeasuringGroup(0) { }
                         if (m0 != null && m0.errorMessage == null && (m0.rawValues.isNotEmpty() || m0.fields.isNotEmpty())) {
                             gotValid = true
-                            m0.rpm?.let { lastRpm = it }
+                            m0.rpm?.let { if (lastRpm == null || useGroupZeroOnly) lastRpm = it }
                             m0.coolantTemp?.let { lastTemp = it }
-                            m0.lambdaVoltage?.let { lastLambdaV = it }
-                            m0.throttleAngle?.let { lastThrottle = it }
-                            m0.batteryVoltage?.let { lastBatteryV = it }
+                            m0.lambdaVoltage?.let { if (lastLambdaV == null) lastLambdaV = it }
+                            m0.lambdaCorrection?.let { if (lastLambdaCorr == null || useGroupZeroOnly) lastLambdaCorr = it }
+                            m0.throttleAngle?.let { if (lastThrottle == null || useGroupZeroOnly) lastThrottle = it }
+                            m0.batteryVoltage?.let { if (lastBatteryV == null) lastBatteryV = it }
                             g0Raw = m0.rawValues
-                        } else if (m0 != null) {
+                        } else if (m0 != null && !gotValid) {
                             lastErr = m0.errorMessage
                         }
                     }
@@ -671,7 +733,7 @@ class MainActivity : AppCompatActivity() {
                         updateGaugeViews(lastRpm, lastTemp, lastLambdaV, lastLambdaCorr, lastThrottle)
 
                         val sb = StringBuilder()
-                        sb.append(if (useGroupZeroOnly) "ЖИВЫЕ ПАРАМЕТРЫ (ГРУППА 000):\n" else "ЖИВЫЕ ПАРАМЕТРЫ ДАТЧИКОВ (ГРУППЫ 001 / 003):\n")
+                        sb.append(if (useGroupZeroOnly) "ЖИВЫЕ ПАРАМЕТРЫ (ГРУППА 000):\n" else "ЖИВЫЕ ПАРАМЕТРЫ ДАТЧИКОВ:\n")
                         sb.append("• Обороты (G40): ").append(lastRpm?.let { "$it об/мин" } ?: "---").append("\n")
                         sb.append("• ДТОЖ (G62): ").append(lastTemp?.let { "$it °C" } ?: "---").append("\n")
                         val lambdaText = when {
@@ -691,6 +753,12 @@ class MainActivity : AppCompatActivity() {
                         if (g3Fields.isNotEmpty()) {
                             sb.append("\nГруппа 003: ").append(g3Fields.joinToString(" | ") { it.valueText })
                         }
+                        if (g4Fields.isNotEmpty()) {
+                            sb.append("\nГруппа 004: ").append(g4Fields.joinToString(" | ") { it.valueText })
+                        }
+                        if (g5Fields.isNotEmpty()) {
+                            sb.append("\nГруппа 005: ").append(g5Fields.joinToString(" | ") { it.valueText })
+                        }
                         if (g0Raw.isNotEmpty()) {
                             sb.append("\nБайты 000: ").append(g0Raw.joinToString(" ") { "%03d".format(it) })
                         }
@@ -703,14 +771,14 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     cycleCount++
-                    delay(200)
+                    delay(180)
                 }
             } catch (t: Throwable) {
                 // Корректное завершение при отмене job
             } finally {
                 liveStreamJob = null
                 runOnUiThread {
-                    btnMeasuring.text = "ИЗМЕРЕНИЯ (08)"
+                    btnMeasuring.text = if (selectedEcuAddress == 0x25) "СТАТУС ИММО (08)" else "ИЗМЕРЕНИЯ (08)"
                     btnMeasuring.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#8B5CF6"))
                 }
             }
@@ -721,7 +789,7 @@ class MainActivity : AppCompatActivity() {
         liveStreamJob?.cancel()
         liveStreamJob = null
         runOnUiThread {
-            btnMeasuring.text = "ИЗМЕРЕНИЯ (08)"
+            btnMeasuring.text = if (selectedEcuAddress == 0x25) "СТАТУС ИММО (08)" else "ИЗМЕРЕНИЯ (08)"
             btnMeasuring.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#8B5CF6"))
         }
     }
@@ -818,16 +886,31 @@ class MainActivity : AppCompatActivity() {
             var activeGroup = 0
             try {
                 var initialResult = protocol.enterBasicSettings(0) { }
-                if (!initialResult.success && initialResult.message.contains("NAK")) {
+                var fallbackMsg: String? = null
+                if (!initialResult.success && protocol.isSessionActive && (initialResult.isNak || initialResult.message.contains("Таймаут") || initialResult.message.contains("отклонил"))) {
+                    delay(60)
                     val fallbackGroup1 = protocol.enterBasicSettings(1) { }
                     if (fallbackGroup1.success) {
                         activeGroup = 1
                         initialResult = fallbackGroup1
+                    } else {
+                        fallbackMsg = fallbackGroup1.message
                     }
                 }
 
                 if (!initialResult.success) {
-                    setResultText("❌ Не удалось войти в Базовые установки:\n${initialResult.message}")
+                    val details = buildString {
+                        append("❌ Не удалось войти в Базовые установки:\n")
+                        append("• Группа 000: ${initialResult.message}\n")
+                        if (!fallbackMsg.isNullOrEmpty()) {
+                            append("• Группа 001: $fallbackMsg\n")
+                        }
+                        append("\nУсловия входа для Bosch Mono-Motronic 1.2.3 (1.8 ADZ):\n")
+                        append("1. Для Группы 000 (УОЗ 6°): двигатель ЗАВЕДЁН на холостых, прогрет >80°C, педаль газа отпущена.\n")
+                        append("2. Для Группы 001 (адаптация РХХ/ДПДЗ): зажигание ВКЛ, двигатель ЗАГЛУШЕН, педаль газа не нажата.\n")
+                        append("3. В памяти ЭБУ не должно быть активных ошибок — сначала нажмите «ОШИБКИ (07)» и «СТЕРЕТЬ (05)».")
+                    }
+                    setResultText(details)
                     return@launch
                 }
 
