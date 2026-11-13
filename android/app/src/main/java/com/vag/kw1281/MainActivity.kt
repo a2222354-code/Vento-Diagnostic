@@ -357,7 +357,7 @@ class MainActivity : AppCompatActivity() {
                 0
             }
             val permissionIntent = PendingIntent.getBroadcast(
-                this, 0, Intent(ACTION_USB_PERMISSION), flags
+                this, 0, Intent(ACTION_USB_PERMISSION).setPackage(packageName), flags
             )
             manager.requestPermission(device, permissionIntent)
         } catch (e: Exception) {}
@@ -817,28 +817,25 @@ class MainActivity : AppCompatActivity() {
         basicSettingsJob = lifecycleScope.launch {
             var activeGroup = 0
             try {
-                var firstResult = protocol.enterBasicSettings(0) { }
-                if (!firstResult.success && firstResult.message.contains("NAK")) {
+                var initialResult = protocol.enterBasicSettings(0) { }
+                if (!initialResult.success && initialResult.message.contains("NAK")) {
                     val fallbackGroup1 = protocol.enterBasicSettings(1) { }
                     if (fallbackGroup1.success) {
                         activeGroup = 1
-                        firstResult = fallbackGroup1
+                        initialResult = fallbackGroup1
                     }
                 }
 
-                if (!firstResult.success) {
-                    setResultText("❌ Не удалось войти в Базовые установки:\n${firstResult.message}")
+                if (!initialResult.success) {
+                    setResultText("❌ Не удалось войти в Базовые установки:\n${initialResult.message}")
                     return@launch
                 }
 
+                var pendingFirstResult: Kw1281Protocol.BasicSettingsResult? = initialResult
+
                 while (isActive && protocol.isSessionActive) {
-                    val res = if (firstResult != null) {
-                        val tmp = firstResult
-                        firstResult = null
-                        tmp
-                    } else {
-                        protocol.enterBasicSettings(activeGroup) { }
-                    }
+                    val res = pendingFirstResult ?: protocol.enterBasicSettings(activeGroup) { }
+                    pendingFirstResult = null
 
                     if (!res.success) {
                         setResultText("Базовые установки прерваны: ${res.message}")
