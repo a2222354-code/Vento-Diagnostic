@@ -15,8 +15,8 @@
         android:layout_marginBottom="8dp">
 
         <ImageView
-            android:layout_width="46dp"
-            android:layout_height="46dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
             android:src="@drawable/ic_launcher"
             android:layout_marginEnd="10dp"
             android:contentDescription="VW Vento" />
@@ -32,7 +32,7 @@
                 android:layout_height="wrap_content"
                 android:text="VENTO DIAGNOSTIC"
                 android:textColor="#38BDF8"
-                android:textSize="19sp"
+                android:textSize="18sp"
                 android:textStyle="bold"
                 android:typeface="monospace" />
 
@@ -71,10 +71,10 @@
         <Button
             android:id="@+id/btnTabEngine"
             android:layout_width="0dp"
-            android:layout_height="48dp"
+            android:layout_height="50dp"
             android:layout_weight="1"
             android:layout_marginEnd="4dp"
-            android:text="ДВИГАТЕЛЬ (0x01)"
+            android:text="ДВИГАТЕЛЬ (01)"
             android:textSize="13sp"
             android:textStyle="bold"
             android:backgroundTint="#0284C7"
@@ -83,11 +83,11 @@
         <Button
             android:id="@+id/btnTabImmo"
             android:layout_width="0dp"
-            android:layout_height="48dp"
+            android:layout_height="50dp"
             android:layout_weight="1"
             android:layout_marginStart="4dp"
-            android:text="ИММОБИЛАЙЗЕР (0x25)"
-            android:textSize="13sp"
+            android:text="ИММОБИЛАЙЗЕР (25)"
+            android:textSize="12sp"
             android:textStyle="bold"
             android:backgroundTint="#334155"
             android:textColor="#94A3B8" />
@@ -106,7 +106,7 @@
             android:id="@+id/tvStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Статус: Готов к подключению"
+            android:text="Статус: Ожидание подключения к ЭБУ"
             android:textColor="#FFFFFF"
             android:textSize="14sp"
             android:textStyle="bold" />
@@ -226,6 +226,7 @@
                 android:typeface="monospace" />
 
             <TextView
+                android:id="@+id/tvGaugeLambdaUnit"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Вольт"
@@ -339,10 +340,10 @@
             android:id="@+id/tvActuatorDesc"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Текущий тест: Форсунка впрыска N30 (щелчки)"
+            android:text="Запуск теста..."
             android:textColor="#FFFFFF"
             android:textSize="12sp"
-            android:layout_marginTop="3dp" />
+            android:layout_marginTop="4dp" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -353,11 +354,11 @@
             <Button
                 android:id="@+id/btnActuatorNext"
                 android:layout_width="0dp"
-                android:layout_height="48dp"
+                android:layout_height="52dp"
                 android:layout_weight="1"
                 android:layout_marginEnd="4dp"
                 android:text="СЛЕДУЮЩИЙ ТЕСТ"
-                android:textSize="12sp"
+                android:textSize="13sp"
                 android:textStyle="bold"
                 android:backgroundTint="#7C3AED"
                 android:textColor="#FFFFFF" />
@@ -365,50 +366,173 @@
             <Button
                 android:id="@+id/btnActuatorStop"
                 android:layout_width="0dp"
-                android:layout_height="48dp"
+                android:layout_height="52dp"
                 android:layout_weight="1"
                 android:layout_marginStart="4dp"
-                android:text="ЗАВЕРШИТЬ ТЕСТ"
-                android:textSize="12sp"
+                android:text="ЗАВЕРШИТЬ"
+                android:textSize="13sp"
                 android:textStyle="bold"
                 android:backgroundTint="#EF4444"
                 android:textColor="#FFFFFF" />
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Large Action Buttons (Spacious, non-clipped, height 52dp) -->
-    <!-- Row 1: Connection -->
+    <!-- Adaptation Controls Card (shows when Adaptation block is opened) -->
     <LinearLayout
+        android:id="@+id/layoutAdaptation"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginBottom="6dp">
+        android:orientation="vertical"
+        android:background="#172554"
+        android:padding="10dp"
+        android:layout_marginBottom="8dp"
+        android:visibility="gone">
 
-        <Button
-            android:id="@+id/btnFindUsb"
-            android:layout_width="0dp"
-            android:layout_height="52dp"
-            android:layout_weight="1"
-            android:layout_marginEnd="4dp"
-            android:text="ПОИСК KKL"
-            android:textSize="13sp"
-            android:textStyle="bold"
-            android:backgroundTint="#0284C7"
-            android:textColor="#FFFFFF" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
 
-        <Button
-            android:id="@+id/btnConnectEcu"
-            android:layout_width="0dp"
-            android:layout_height="52dp"
-            android:layout_weight="1"
-            android:layout_marginStart="4dp"
-            android:text="ПОДКЛЮЧИТЬ"
-            android:textSize="13sp"
-            android:textStyle="bold"
-            android:backgroundTint="#10B981"
-            android:textColor="#FFFFFF"
-            android:enabled="false" />
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="АДАПТАЦИЯ БЛОКА (KWP1281)"
+                android:textColor="#60A5FA"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnAdaptClose"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:text="Закрыть"
+                android:textSize="11sp"
+                android:backgroundTint="#1E293B"
+                android:textColor="#94A3B8" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvAdaptHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Канал 00: сброс выученных адаптаций / привязка ЭБУ"
+            android:textColor="#CBD5E1"
+            android:textSize="11sp"
+            android:layout_marginTop="2dp"
+            android:layout_marginBottom="6dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="6dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Канал:"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="6dp" />
+
+            <EditText
+                android:id="@+id/etAdaptChannel"
+                android:layout_width="64dp"
+                android:layout_height="44dp"
+                android:background="#0F172A"
+                android:text="00"
+                android:textColor="#38BDF8"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:inputType="number"
+                android:maxLength="3"
+                android:layout_marginEnd="12dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Значение:"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="6dp" />
+
+            <EditText
+                android:id="@+id/etAdaptValue"
+                android:layout_width="0dp"
+                android:layout_height="44dp"
+                android:layout_weight="1"
+                android:background="#0F172A"
+                android:text="0"
+                android:textColor="#10B981"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:inputType="number"
+                android:maxLength="5" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnAdaptRead"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="3dp"
+                android:text="ЧИТАТЬ"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:backgroundTint="#0284C7"
+                android:textColor="#FFFFFF" />
+
+            <Button
+                android:id="@+id/btnAdaptTest"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:layout_marginStart="3dp"
+                android:layout_marginEnd="3dp"
+                android:text="ТЕСТ"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:backgroundTint="#D97706"
+                android:textColor="#FFFFFF" />
+
+            <Button
+                android:id="@+id/btnAdaptSave"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1.2"
+                android:layout_marginStart="3dp"
+                android:text="СОХРАНИТЬ"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:backgroundTint="#10B981"
+                android:textColor="#FFFFFF" />
+        </LinearLayout>
     </LinearLayout>
+
+    <!-- Main Action Buttons (Spacious 54dp/52dp buttons, full labels) -->
+    <!-- Row 1: Full-width Connect button (auto-detects USB KKL) -->
+    <Button
+        android:id="@+id/btnConnectEcu"
+        android:layout_width="match_parent"
+        android:layout_height="54dp"
+        android:layout_marginBottom="6dp"
+        android:text="ПОДКЛЮЧИТЬ ЭБУ"
+        android:textSize="15sp"
+        android:textStyle="bold"
+        android:backgroundTint="#10B981"
+        android:textColor="#FFFFFF" />
 
     <!-- Row 2: DTC Faults -->
     <LinearLayout
@@ -423,8 +547,8 @@
             android:layout_height="52dp"
             android:layout_weight="1"
             android:layout_marginEnd="4dp"
-            android:text="ОШИБКИ (0x07)"
-            android:textSize="13sp"
+            android:text="ОШИБКИ (07)"
+            android:textSize="14sp"
             android:textStyle="bold"
             android:backgroundTint="#F59E0B"
             android:textColor="#FFFFFF"
@@ -436,16 +560,17 @@
             android:layout_height="52dp"
             android:layout_weight="1"
             android:layout_marginStart="4dp"
-            android:text="СТЕРЕТЬ (0x05)"
-            android:textSize="13sp"
+            android:text="СТЕРЕТЬ (05)"
+            android:textSize="14sp"
             android:textStyle="bold"
             android:backgroundTint="#EF4444"
             android:textColor="#FFFFFF"
             android:enabled="false" />
     </LinearLayout>
 
-    <!-- Row 3: Diagnostics & Actuators -->
+    <!-- Row 3: Live Data & Actuator Test -->
     <LinearLayout
+        android:id="@+id/rowEngineDiagnostics"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
@@ -470,20 +595,20 @@
             android:layout_height="52dp"
             android:layout_weight="1"
             android:layout_marginStart="4dp"
-            android:text="ТЕСТ ИСПОЛНИТЕЛЕЙ"
-            android:textSize="12sp"
+            android:text="ИСПОЛНИТЕЛИ (04)"
+            android:textSize="13sp"
             android:textStyle="bold"
             android:backgroundTint="#7C3AED"
             android:textColor="#FFFFFF"
             android:enabled="false" />
     </LinearLayout>
 
-    <!-- Row 4: Basic Settings & Passport -->
+    <!-- Row 4: Basic Settings & Adaptation -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:layout_marginBottom="8dp">
+        android:layout_marginBottom="6dp">
 
         <Button
             android:id="@+id/btnBasicSettings"
@@ -492,69 +617,60 @@
             android:layout_weight="1"
             android:layout_marginEnd="4dp"
             android:text="БАЗОВЫЕ (УОЗ 6°)"
-            android:textSize="12sp"
+            android:textSize="13sp"
             android:textStyle="bold"
             android:backgroundTint="#0D9488"
             android:textColor="#FFFFFF"
             android:enabled="false" />
 
         <Button
-            android:id="@+id/btnEcuPassport"
+            android:id="@+id/btnAdaptationOpen"
             android:layout_width="0dp"
             android:layout_height="52dp"
             android:layout_weight="1"
             android:layout_marginStart="4dp"
-            android:text="ПАСПОРТ БЛОКА"
-            android:textSize="12sp"
+            android:text="АДАПТАЦИЯ (10)"
+            android:textSize="13sp"
             android:textStyle="bold"
-            android:backgroundTint="#475569"
+            android:backgroundTint="#2563EB"
             android:textColor="#FFFFFF"
             android:enabled="false" />
     </LinearLayout>
 
-    <!-- Diagnostic Results Section Header -->
+    <!-- Row 5: ECU Passport & Report -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:layout_marginBottom="4dp">
+        android:layout_marginBottom="8dp">
 
-        <TextView
-            android:id="@+id/tvResultsHeader"
+        <Button
+            android:id="@+id/btnEcuPassport"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="48dp"
             android:layout_weight="1"
-            android:text="Результаты диагностики:"
-            android:textColor="#CBD5E1"
+            android:layout_marginEnd="4dp"
+            android:text="ПАСПОРТ ЭБУ"
             android:textSize="13sp"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            android:backgroundTint="#475569"
+            android:textColor="#FFFFFF"
+            android:enabled="false" />
 
         <Button
             android:id="@+id/btnShareReport"
-            android:layout_width="wrap_content"
-            android:layout_height="32dp"
-            android:text="Копировать отчёт"
-            android:textSize="10sp"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:text="КОПИРОВАТЬ ОТЧЁТ"
+            android:textSize="12sp"
+            android:textStyle="bold"
             android:backgroundTint="#1E293B"
-            android:textColor="#38BDF8"
-            android:layout_marginEnd="4dp" />
-
-        <Button
-            android:id="@+id/btnClearResults"
-            android:layout_width="wrap_content"
-            android:layout_height="32dp"
-            android:text="Очистить"
-            android:textSize="10sp"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            android:backgroundTint="#1E293B"
-            android:textColor="#94A3B8" />
+            android:textColor="#38BDF8" />
     </LinearLayout>
 
-    <!-- Diagnostic Results Display (Clean Cards without raw byte clutter) -->
+    <!-- Diagnostic Results Display -->
     <ScrollView
         android:id="@+id/scrollViewResults"
         android:layout_width="match_parent"
@@ -570,7 +686,7 @@
             android:textColor="#F1F5F9"
             android:textSize="12sp"
             android:lineSpacingExtra="3dp"
-            android:text="Подключите USB KKL адаптер и нажмите «ПОДКЛЮЧИТЬ»." />
+            android:text="Подключите USB KKL адаптер к телефону, включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ»." />
     </ScrollView>
 
 </LinearLayout>

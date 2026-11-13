@@ -9,20 +9,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 
 /**
  * Протокол VAG KWP1281 (ISO 9141-2) для диагностики блоков VW Vento / Golf 3:
  * 1. ЭБУ двигателя (0x01) — Bosch Mono-Motronic 1.2.3 (3A0 907 311, 1.8 ADZ / AAM / ABS).
  * 2. Блок иммобилайзера (0x25) — Wegfahrsicherung (1H0 953 257).
- * 
- * Поддерживаемые функции:
- * - 0x07: Чтение кодов неисправностей (DTC) с развернутыми причинами и советами.
- * - 0x05: Стирание кодов неисправностей.
- * - 0x04: Тест исполнительных механизмов (форсунка N30, клапан адсорбера N80, РХХ V60, реле насоса).
- * - 0x08: Измерительные группы (Live Data двигателя и статус транспондера иммобилайзера).
- * - 0x28: Базовые установки (регулировка УОЗ 6° до ВМТ стробоскопом, адаптация РХХ).
- * - 0x09: Фоновый Keep-Alive heartbeat (каждые 500 мс).
- * - 0x06: Завершение диагностического сеанса.
+ *
+ * Строго соблюдается полудуплексный обмен (ping-pong) KWP1281:
+ * на каждый запрос тестера ЭБУ отвечает ровно одним блоком,
+ * и каждый публичный метод под busMutex начинается и заканчивается в очереди тестера.
  */
 class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
 
@@ -33,11 +29,13 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     var negotiatedBaud: Int = 9600
     var activeAddress: Int = 0x01
 
-    private var isSessionActive = false
+    @Volatile
+    var isSessionActive: Boolean = false
+        private set
+
     private val busMutex = Mutex()
     private var keepAliveJob: Job? = null
-    private var isActuatorTestActive = false
-    private var actuatorStepIndex = 0
+    private var consecutiveKeepAliveErrors = 0
 
     data class KwBlock(
         val length: Int,
@@ -46,15 +44,48 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val data: ByteArray
     )
 
+    data class MeasuredField(
+        val index: Int,
+        val valueText: String,
+        val formula: Int,
+        val a: Int,
+        val b: Int
+    )
+
     data class LiveMeasurement(
         val group: Int,
         val rpm: Int? = null,
         val coolantTemp: Int? = null,
         val lambdaVoltage: Double? = null,
+        val lambdaCorrection: Double? = null,
         val throttleAngle: Double? = null,
         val batteryVoltage: Double? = null,
         val intakeAirTemp: Int? = null,
-        val rawValues: List<Int> = emptyList()
+        val injectionTimeMs: Double? = null,
+        val rawValues: List<Int> = emptyList(),
+        val fields: List<MeasuredField> = emptyList(),
+        val isUnsupportedNak: Boolean = false,
+        val errorMessage: String? = null
+    )
+
+    data class ActuatorStepResult(
+        val active: Boolean,
+        val finished: Boolean,
+        val refused: Boolean = false,
+        val text: String
+    )
+
+    data class BasicSettingsResult(
+        val success: Boolean,
+        val measurement: LiveMeasurement? = null,
+        val message: String
+    )
+
+    data class AdaptationResult(
+        val success: Boolean,
+        val channel: Int,
+        val value: Int,
+        val message: String
     )
 
     data class ImmoStatus(
@@ -74,17 +105,16 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     )
 
     companion object {
-        // Известные шаги теста исполнителей для Mono-Motronic 1.2.3
-        private val ACTUATOR_STEPS_MONO = listOf(
-            "Форсунка впрыска топлива (N30)\n→ Должны быть слышны чёткие ритмичные щелчки электромагнита форсунки в моновпрыске.",
-            "Клапан продувки адсорбера (N80)\n→ Тактирование клапана вентиляции бака (частые щелчки на правом брызговике).",
-            "Регулятор положения дроссельной заслонки / РХХ (V60)\n→ Моторчик сервопривода выдвигает и втягивает шток дросселя.",
-            "Реле топливного насоса (J17)\n→ Кратковременное включение и отключение бензонасоса в баке.",
-            "Тест исполнителей завершён."
+        private val VAG_ACTUATOR_CODES = mapOf(
+            "01249" to "Форсунка впрыска топлива (N30)\n→ Прислушайтесь к форсунке моновпрыска: должны раздаваться ритмичные щелчки.",
+            "01247" to "Клапан продувки адсорбера (N80)\n→ Клапан на правом брызговике должен тактированно щёлкать.",
+            "00282" to "Регулятор положения дроссельной заслонки / РХХ (V60)\n→ Сервопривод РХХ плавно выдвигает и втягивает шток заслонки.",
+            "00670" to "Регулятор холостого хода / Датчик положения (V60 / G88)\n→ Сервопривод РХХ выполняет ход проверки штока.",
+            "01259" to "Реле топливного насоса (J17)\n→ Кратковременное включение бензонасоса и подогрева коллектора.",
+            "01250" to "Реле топливного насоса / Форсунка\n→ Активация исполнительной цепи питания топлива."
         )
 
         val ALL_KNOWN_DTCS = mapOf(
-            // Двигатель Mono-Motronic 1.2.3
             "00515" to DtcDetailedItem(
                 code = "00515",
                 component = "Датчик Холла (G40)",
@@ -126,7 +156,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 component = "Адаптация смеси (Mixture Regulation)",
                 statusText = "08-00 — Превышен предел регулирования",
                 cause = "Порвана резино-металлическая подушка моновпрыска (подсос воздуха), трещины вакуумного шланга ВУТ, низкое давление топлива (< 0.8 бар).",
-                remedy = "Покачать моновпрыск рукой на работающем моторе. Проверить давление топлива (0.8–1.2 бар для Mono-Motronic). Выполнить сброс адаптаций в Базовых."
+                remedy = "Покачать моновпрыск рукой на работающем моторе. Проверить давление топлива (0.8–1.2 бар для Mono-Motronic). Выполнить сброс в Адаптации (Канал 00)."
             ),
             "00670" to DtcDetailedItem(
                 code = "00670",
@@ -184,8 +214,6 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 cause = "Повреждение содержимого микросхемы памяти, перепад напряжения, плохая масса.",
                 remedy = "Проверить контакты разъема (пины массы), замерить напряжение при включении зажигания."
             ),
-
-            // Иммобилайзер (0x25 - Wegfahrsicherung 1H0 953 257)
             "01176" to DtcDetailedItem(
                 code = "01176",
                 component = "Ключ зажигания (Transponder Key)",
@@ -198,7 +226,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 component = "Блок управления двигателя (ЭБУ)",
                 statusText = "65-10 — Не авторизован / Блокирован иммобилайзером",
                 cause = "Иммобилайзер заблокировал запуск двигателя. Мотор запускается и глохнет ровно через 1-2 секунды.",
-                remedy = "Произвести адаптацию блока управления двигателем к иммобилайзеру (Вход в Иммобилайзер 0x25 -> Адаптация Канал 00 -> Сохранить, выключить зажигание на 30 сек)."
+                remedy = "Произвести адаптацию блока управления двигателем к иммобилайзеру: Иммобилайзер (0x25) → Адаптация → Канал 00 → Сохранить (значение 0), выключить зажигание на 30 сек."
             ),
             "01179" to DtcDetailedItem(
                 code = "01179",
@@ -226,8 +254,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             try {
                 stopKeepAliveInternal()
                 isSessionActive = false
-                isActuatorTestActive = false
-                actuatorStepIndex = 0
+                consecutiveKeepAliveErrors = 0
                 blockCounter = 0
                 ecuPartNumber = ""
                 ecuComponent = ""
@@ -237,13 +264,12 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 val blockName = if (targetAddr == 0x25) "Иммобилайзер (0x25)" else "ЭБУ Двигателя (0x01)"
                 onLog("Подключение: $blockName...")
 
-                // Для иммобилайзера скорость всегда 9600; для двигателя пробуем 9600, затем 10400
                 val speeds = if (targetAddr == 0x25) listOf(9600) else listOf(9600, 10400)
                 for (speed in speeds) {
                     if (tryConnectSpeed(targetAddr, speed, onLog)) {
                         negotiatedBaud = speed
                         isSessionActive = true
-                        startKeepAlive(onLog)
+                        startKeepAlive()
                         onLog("Связь с $blockName установлена на $speed бод.")
                         return@withContext true
                     }
@@ -267,17 +293,13 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
 
         while (System.currentTimeMillis() - syncStart < 3500) {
             val b = driver.readByte(250)
-            if (b >= 0) {
-                if (b == 0x55) {
-                    syncFound = true
-                    break
-                }
+            if (b == 0x55) {
+                syncFound = true
+                break
             }
         }
 
-        if (!syncFound) {
-            return false
-        }
+        if (!syncFound) return false
 
         val kb1 = driver.readByte(1000)
         if (kb1 < 0) return false
@@ -288,30 +310,33 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val comp = ((kb2 xor 0xFF) and 0xFF).toByte()
         driver.writeRawByte(comp, 300)
 
-        val ok = readIdentificationBlocks(onLog)
-        return ok
+        return readIdentificationBlocks(onLog)
     }
 
     /**
-     * Чтение блоков идентификации 0xF6
+     * Чтение блоков идентификации 0xF6 до завершающего 0x09 от ЭБУ.
+     * На 0x09 выходим без отправки ACK — очередь передачи переходит к тестеру.
      */
-    suspend fun readIdentificationBlocks(onLog: (String) -> Unit): Boolean {
+    private suspend fun readIdentificationBlocks(onLog: (String) -> Unit): Boolean {
         var blocksRead = 0
-        while (blocksRead < 5) {
+        while (blocksRead < 10) {
             val block = receiveBlockInternal(2000) ?: break
             blocksRead++
 
-            if (block.title == 0xF6) {
+            if (block.title == 0xF6 || block.title == 0x00) {
                 val text = String(block.data, Charsets.US_ASCII).trim()
                 when (blocksRead) {
                     1 -> { ecuPartNumber = text; onLog("Номер: $text") }
                     2 -> { ecuComponent = text; onLog("Компонент: $text") }
                     3 -> { ecuExtra = text; onLog("Кодировка: $text") }
-                    else -> onLog("Инфо: $text")
+                    else -> if (text.isNotEmpty()) onLog("Инфо: $text")
                 }
-                sendBlockInternal(0x09)
+                if (!sendBlockInternal(0x09)) return false
             } else if (block.title == 0x09) {
+                // Конец паспорта, очередь тестера
                 return true
+            } else {
+                if (!sendBlockInternal(0x09)) return false
             }
         }
         return ecuPartNumber.isNotEmpty()
@@ -343,17 +368,17 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val len = driver.readByte(timeoutMs)
         if (len < 3 || len > 32) return null
         sendByteAck(len)
-        delay(3)
+        delay(2)
 
         val counter = driver.readByte(400)
         if (counter < 0) return null
         sendByteAck(counter)
-        delay(3)
+        delay(2)
 
         val title = driver.readByte(400)
         if (title < 0) return null
         sendByteAck(title)
-        delay(3)
+        delay(2)
 
         val dataLen = len - 3
         val data = ByteArray(dataLen)
@@ -362,10 +387,11 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             if (d < 0) return null
             data[i] = d.toByte()
             sendByteAck(d)
-            delay(3)
+            delay(2)
         }
 
-        val end = driver.readByte(400)
+        // Конец блока 0x03 (не подтверждается инверсией)
+        driver.readByte(400)
         delay(6)
 
         blockCounter = counter
@@ -377,22 +403,30 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         driver.writeRawByte(comp, 200)
     }
 
-    private fun startKeepAlive(onLog: (String) -> Unit) {
+    private fun startKeepAlive() {
         stopKeepAliveInternal()
         keepAliveJob = CoroutineScope(Dispatchers.IO).launch {
             while (isActive && isSessionActive) {
-                delay(500)
-                if (!isSessionActive || isActuatorTestActive) break
+                delay(450)
+                if (!isSessionActive) break
                 try {
                     busMutex.withLock {
-                        if (isSessionActive && !isActuatorTestActive) {
+                        if (isSessionActive) {
                             val ok = sendBlockInternal(0x09)
-                            if (ok) {
-                                receiveBlockInternal(1000)
+                            val reply = if (ok) receiveBlockInternal(1000) else null
+                            if (ok && reply != null) {
+                                consecutiveKeepAliveErrors = 0
+                            } else {
+                                consecutiveKeepAliveErrors++
+                                if (consecutiveKeepAliveErrors >= 6) {
+                                    isSessionActive = false
+                                }
                             }
                         }
                     }
-                } catch (t: Throwable) {}
+                } catch (t: Throwable) {
+                    consecutiveKeepAliveErrors++
+                }
             }
         }
     }
@@ -406,13 +440,12 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
 
     fun stopSession() {
         isSessionActive = false
-        isActuatorTestActive = false
         stopKeepAliveInternal()
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 busMutex.withLock {
                     sendBlockInternal(0x06)
-                    delay(50)
+                    delay(40)
                 }
             } catch (t: Throwable) {}
         }
@@ -425,6 +458,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val faults = mutableListOf<DtcDetailedItem>()
         busMutex.withLock {
             try {
+                if (!isSessionActive) return@withContext faults
                 val sent = sendBlockInternal(0x07)
                 if (!sent) {
                     onLog("Ошибка отправки команды 0x07")
@@ -433,7 +467,6 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
 
                 while (true) {
                     val block = receiveBlockInternal(2000) ?: break
-                    blockCounter = block.counter
 
                     if (block.title == 0xFC) {
                         var idx = 0
@@ -457,12 +490,12 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                                 faults.add(item)
                             }
                         }
-                        sendBlockInternal(0x09)
-                    } else if (block.title == 0x09) {
-                        sendBlockInternal(0x09)
+                        // Запрашиваем следующий блок ошибок (или конец списка)
+                        if (!sendBlockInternal(0x09)) break
+                    } else if (block.title == 0x09 || block.title == 0x0A) {
+                        // Конец списка ошибок — очередь тестера
                         break
                     } else {
-                        sendBlockInternal(0x09)
                         break
                     }
                 }
@@ -479,77 +512,139 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     suspend fun clearFaultCodes(onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
         busMutex.withLock {
             try {
+                if (!isSessionActive) return@withContext false
                 val sent = sendBlockInternal(0x05)
                 if (!sent) return@withContext false
 
-                val reply = receiveBlockInternal(2000)
-                if (reply != null) {
-                    blockCounter = reply.counter
-                    sendBlockInternal(0x09)
-                    return@withContext true
+                var steps = 0
+                while (steps < 4) {
+                    steps++
+                    val reply = receiveBlockInternal(2000) ?: return@withContext false
+                    if (reply.title == 0xFC) {
+                        if (!sendBlockInternal(0x09)) break
+                    } else {
+                        // Получен 0x09 или 0x0A — очередь тестера
+                        return@withContext reply.title == 0x09
+                    }
                 }
-                return@withContext true
+                true
             } catch (t: Throwable) {
-                return@withContext false
+                false
             }
         }
     }
 
     /**
      * Тест исполнительных механизмов (Команда 0x04)
-     * Пошаговая активация исполнителей с получением подтверждения
+     * Keep-alive продолжает работать между нажатиями пользователя,
+     * так как все операции синхронизированы через busMutex.
      */
-    suspend fun stepActuatorTest(onLog: (String) -> Unit): String? = withContext(Dispatchers.IO) {
+    suspend fun stepActuatorTest(onLog: (String) -> Unit): ActuatorStepResult = withContext(Dispatchers.IO) {
         busMutex.withLock {
             try {
-                isActuatorTestActive = true
+                if (!isSessionActive) {
+                    return@withContext ActuatorStepResult(
+                        active = false,
+                        finished = true,
+                        text = "Сеанс связи с ЭБУ не активен. Подключитесь заново."
+                    )
+                }
+
                 val sent = sendBlockInternal(0x04)
                 if (!sent) {
-                    onLog("Ошибка отправки команды 0x04")
-                    return@withContext null
+                    return@withContext ActuatorStepResult(
+                        active = false,
+                        finished = true,
+                        text = "Ошибка обмена: ЭБУ не принял команду 0x04."
+                    )
                 }
 
                 val reply = receiveBlockInternal(2500)
-                if (reply != null) {
-                    blockCounter = reply.counter
-                    sendBlockInternal(0x09) // ACK
+                if (reply == null) {
+                    return@withContext ActuatorStepResult(
+                        active = false,
+                        finished = true,
+                        text = "Таймаут ответа ЭБУ на тест исполнителей (0x04)."
+                    )
+                }
 
-                    if (reply.title == 0xF5) {
-                        // ЭБУ передал имя исполнителя в ASCII
-                        val text = String(reply.data, Charsets.US_ASCII).trim()
-                        val stepDesc = ACTUATOR_STEPS_MONO.getOrNull(actuatorStepIndex)
-                            ?: "Исполнитель: $text"
-                        actuatorStepIndex++
-                        return@withContext stepDesc
-                    } else if (reply.title == 0x09) {
-                        // Конец теста
-                        isActuatorTestActive = false
-                        actuatorStepIndex = 0
-                        return@withContext "Тест исполнителей завершён (все элементы проверены)."
+                when (reply.title) {
+                    0xF5 -> {
+                        val desc = decodeActuatorPayload(reply.data)
+                        ActuatorStepResult(active = true, finished = false, text = desc)
+                    }
+                    0x09 -> {
+                        ActuatorStepResult(
+                            active = false,
+                            finished = true,
+                            text = "Тест исполнительных механизмов завершён (все элементы проверены)."
+                        )
+                    }
+                    0x0A -> {
+                        ActuatorStepResult(
+                            active = false,
+                            finished = true,
+                            refused = true,
+                            text = "ЭБУ отклонил тест исполнителей (NAK 0x0A).\n• Убедитесь, что двигатель ЗАГЛУШЕН (0 об/мин), а зажигание включено!"
+                        )
+                    }
+                    else -> {
+                        ActuatorStepResult(
+                            active = false,
+                            finished = true,
+                            text = "Неожиданный ответ ЭБУ: Title 0x%02X".format(reply.title)
+                        )
                     }
                 }
-                // Fallback по шагам, если ЭБУ отдаёт сырой маркер
-                if (actuatorStepIndex < ACTUATOR_STEPS_MONO.size) {
-                    val stepDesc = ACTUATOR_STEPS_MONO[actuatorStepIndex]
-                    actuatorStepIndex++
-                    return@withContext stepDesc
-                } else {
-                    isActuatorTestActive = false
-                    actuatorStepIndex = 0
-                    return@withContext "Тест исполнителей завершён."
-                }
             } catch (t: Throwable) {
-                onLog("Ошибка теста исполнителей: ${t.message}")
-                isActuatorTestActive = false
-                null
+                ActuatorStepResult(
+                    active = false,
+                    finished = true,
+                    text = "Ошибка теста исполнителей: ${t.message ?: t.javaClass.simpleName}"
+                )
             }
         }
     }
 
-    fun stopActuatorTest() {
-        isActuatorTestActive = false
-        actuatorStepIndex = 0
-        startKeepAlive { }
+    /**
+     * Штатное завершение теста исполнителей в KWP1281 (пролистывание шагов 0x04 до 0x09)
+     */
+    suspend fun finishActuatorTest(): Boolean = withContext(Dispatchers.IO) {
+        busMutex.withLock {
+            try {
+                if (!isSessionActive) return@withContext false
+                for (i in 0 until 8) {
+                    if (!sendBlockInternal(0x04)) return@withContext false
+                    val reply = receiveBlockInternal(2000) ?: return@withContext false
+                    if (reply.title == 0x09 || reply.title == 0x0A) {
+                        return@withContext true
+                    }
+                    delay(40)
+                }
+                true
+            } catch (t: Throwable) {
+                false
+            }
+        }
+    }
+
+    private fun decodeActuatorPayload(data: ByteArray): String {
+        if (data.size == 2) {
+            val code = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
+            val vagCode = "%05d".format(code)
+            return VAG_ACTUATOR_CODES[vagCode]
+                ?: "Активен исполнительный механизм VAG $vagCode\n→ Проверьте срабатывание элемента под капотом."
+        }
+        val ascii = String(data, Charsets.US_ASCII).trim()
+        if (ascii.isNotEmpty() && ascii.all { it.code in 32..126 }) {
+            // Проверка на присутствие кода VAG в строке
+            for ((code, desc) in VAG_ACTUATOR_CODES) {
+                if (ascii.contains(code)) return "$ascii\n$desc"
+            }
+            return "Активен исполнитель: $ascii"
+        }
+        val hex = data.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
+        return "Активен тест исполнителя (данные: $hex)"
     }
 
     /**
@@ -557,91 +652,261 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
      */
     suspend fun readImmobilizerStatus(onLog: (String) -> Unit): ImmoStatus? = withContext(Dispatchers.IO) {
         val m = readMeasuringGroup(1, onLog) ?: return@withContext null
-        val raw = m.rawValues
-        if (raw.size >= 4) {
-            val startPermitted = raw[0] == 1
-            val ecuResponds = raw[1] == 1
-            val keyAuth = raw[2] == 1
-            val keyCount = raw[3]
+        if (m.errorMessage != null || m.isUnsupportedNak) return@withContext null
+
+        // В группе 001 иммобилайзера 1H0 953 257 приходят 4 значения:
+        // Поле 1: разрешение пуска (0/1), Поле 2: ответ ЭБУ (0/1), Поле 3: ключ авторизован (0/1), Поле 4: кол-во ключей
+        if (m.fields.size >= 4) {
             return@withContext ImmoStatus(
-                startPermitted = startPermitted,
-                ecuResponds = ecuResponds,
-                keyAuthorized = keyAuth,
-                keyCount = keyCount
+                startPermitted = m.fields[0].b == 1,
+                ecuResponds = m.fields[1].b == 1,
+                keyAuthorized = m.fields[2].b == 1,
+                keyCount = m.fields[3].b
             )
         }
-        // Значения по умолчанию при наличии связи с блоком 1H0 953 257
-        ImmoStatus(
-            startPermitted = true,
-            ecuResponds = true,
-            keyAuthorized = true,
-            keyCount = 1
-        )
+        if (m.rawValues.size >= 4) {
+            return@withContext ImmoStatus(
+                startPermitted = m.rawValues[0] == 1,
+                ecuResponds = m.rawValues[1] == 1,
+                keyAuthorized = m.rawValues[2] == 1,
+                keyCount = m.rawValues[3]
+            )
+        }
+        null
     }
 
     /**
-     * Чтение группы измерительных величин Live Data (Команда 0x08)
+     * Чтение группы измерительных величин Live Data (Команда 0x08 или 0x29 для Группы 000)
      */
-    suspend fun readMeasuringGroup(group: Int = 0, onLog: (String) -> Unit): LiveMeasurement? = withContext(Dispatchers.IO) {
+    suspend fun readMeasuringGroup(group: Int = 1, onLog: (String) -> Unit): LiveMeasurement? = withContext(Dispatchers.IO) {
         busMutex.withLock {
-            try {
-                val payload = byteArrayOf(group.toByte())
-                val sent = sendBlockInternal(0x08, payload)
-                if (!sent) return@withContext null
+            readMeasuringGroupUnlocked(group, onLog)
+        }
+    }
 
-                val reply = receiveBlockInternal(2000)
-                if (reply != null) {
-                    blockCounter = reply.counter
-                    sendBlockInternal(0x09) // ACK
+    private suspend fun readMeasuringGroupUnlocked(group: Int, onLog: (String) -> Unit): LiveMeasurement? {
+        try {
+            if (!isSessionActive) {
+                return LiveMeasurement(group = group, errorMessage = "Сеанс связи закрыт")
+            }
 
-                    if (reply.title == 0xE7) {
-                        return@withContext parseMeasuringBlock(reply.data, group, onLog)
-                    }
+            var sent = sendBlockInternal(0x08, byteArrayOf(group.toByte()))
+            if (!sent) {
+                return LiveMeasurement(group = group, errorMessage = "Нет ответа шины на запрос группы %03d".format(group))
+            }
+
+            var reply = receiveBlockInternal(2000)
+
+            // Для Группы 000 старые ЭБУ Bosch Mono-Motronic используют команду 0x29 без аргументов
+            if (group == 0 && (reply == null || reply.title == 0x0A)) {
+                sent = sendBlockInternal(0x29)
+                if (sent) {
+                    reply = receiveBlockInternal(2000)
                 }
-            } catch (t: Throwable) {}
-            null
+            }
+
+            if (reply == null) {
+                return LiveMeasurement(group = group, errorMessage = "Таймаут чтения группы %03d".format(group))
+            }
+
+            return when (reply.title) {
+                0xE7, 0xF4, 0x02 -> parseMeasuringBlock(reply.data, group)
+                0x0A -> LiveMeasurement(
+                    group = group,
+                    isUnsupportedNak = true,
+                    errorMessage = "Группа %03d не поддерживается ЭБУ (NAK 0x0A)".format(group)
+                )
+                0x09 -> LiveMeasurement(group = group, errorMessage = "Группа %03d: пустой ответ (0x09)".format(group))
+                else -> LiveMeasurement(
+                    group = group,
+                    errorMessage = "Неожиданный блок 0x%02X на группу %03d".format(reply.title, group)
+                )
+            }
+        } catch (t: Throwable) {
+            onLog("Ошибка чтения группы %03d: ${t.message}".format(group))
+            return LiveMeasurement(group = group, errorMessage = t.message)
         }
     }
 
     /**
-     * Базовые установки (Команда 0x28, Группа 000)
+     * Базовые установки (Команда 0x28 или 0x11 для Группы 000)
      */
-    suspend fun enterBasicSettings(group: Int = 0, onLog: (String) -> Unit): LiveMeasurement? = withContext(Dispatchers.IO) {
+    suspend fun enterBasicSettings(group: Int = 0, onLog: (String) -> Unit): BasicSettingsResult = withContext(Dispatchers.IO) {
         busMutex.withLock {
             try {
-                val payload = byteArrayOf(group.toByte())
-                val sent = sendBlockInternal(0x28, payload)
-                if (!sent) return@withContext null
+                if (!isSessionActive) {
+                    return@withContext BasicSettingsResult(false, message = "Сеанс связи с ЭБУ не активен.")
+                }
+
+                var sent = sendBlockInternal(0x28, byteArrayOf(group.toByte()))
+                if (!sent) {
+                    return@withContext BasicSettingsResult(false, message = "Ошибка передачи команды Базовых установок (0x28).")
+                }
+
+                var reply = receiveBlockInternal(2500)
+
+                // Фоллбек на команду 0x11 (Базовые установки группы 000 на ранних Bosch Mono-Motronic 1.2.3)
+                if (group == 0 && (reply == null || reply.title == 0x0A)) {
+                    sent = sendBlockInternal(0x11)
+                    if (sent) {
+                        reply = receiveBlockInternal(2500)
+                    }
+                }
+
+                if (reply == null) {
+                    return@withContext BasicSettingsResult(false, message = "Таймаут ответа ЭБУ на Базовые установки (0x28 / 0x11).")
+                }
+
+                return@withContext when (reply.title) {
+                    0xE7, 0xF4, 0x02 -> {
+                        val m = parseMeasuringBlock(reply.data, group)
+                        BasicSettingsResult(
+                            success = true,
+                            measurement = m,
+                            message = "Базовые установки группы %03d активны!".format(group)
+                        )
+                    }
+                    0x09 -> BasicSettingsResult(
+                        success = true,
+                        measurement = LiveMeasurement(group = group),
+                        message = "Режим базовых установок подтверждён ЭБУ (0x09)."
+                    )
+                    0x0A -> BasicSettingsResult(
+                        success = false,
+                        message = "ЭБУ отклонил Базовые установки (NAK 0x0A).\n• Для Группы 000/001 двигатель должен быть заведён на ХХ и прогрет (>80°C), педаль газа отпущена."
+                    )
+                    else -> BasicSettingsResult(
+                        success = false,
+                        message = "Неожиданный ответ ЭБУ: Title 0x%02X".format(reply.title)
+                    )
+                }
+            } catch (t: Throwable) {
+                BasicSettingsResult(false, message = "Ошибка входа в Базовые установки: ${t.message ?: t.javaClass.simpleName}")
+            }
+        }
+    }
+
+    /**
+     * АДАПТАЦИЯ: Чтение канала (0x21)
+     */
+    suspend fun readAdaptation(channel: Int): AdaptationResult = withContext(Dispatchers.IO) {
+        executeAdaptationCommand(0x21, channel, 0, "Чтение")
+    }
+
+    /**
+     * АДАПТАЦИЯ: Проверка значения в канале без сохранения (0x22)
+     */
+    suspend fun testAdaptation(channel: Int, value: Int): AdaptationResult = withContext(Dispatchers.IO) {
+        executeAdaptationCommand(0x22, channel, value, "Тест")
+    }
+
+    /**
+     * АДАПТАЦИЯ: Сохранение значения в память ЭБУ (0x2A)
+     */
+    suspend fun saveAdaptation(channel: Int, value: Int): AdaptationResult = withContext(Dispatchers.IO) {
+        executeAdaptationCommand(0x2A, channel, value, "Сохранение")
+    }
+
+    private suspend fun executeAdaptationCommand(
+        cmd: Int,
+        channel: Int,
+        value: Int,
+        opName: String
+    ): AdaptationResult {
+        return busMutex.withLock {
+            try {
+                if (!isSessionActive) {
+                    return@withLock AdaptationResult(false, channel, value, "Сеанс связи с блоком не активен.")
+                }
+
+                val payload = if (cmd == 0x21) {
+                    byteArrayOf(channel.toByte())
+                } else {
+                    byteArrayOf(
+                        channel.toByte(),
+                        ((value shr 8) and 0xFF).toByte(),
+                        (value and 0xFF).toByte()
+                    )
+                }
+
+                if (!sendBlockInternal(cmd, payload)) {
+                    return@withLock AdaptationResult(false, channel, value, "Ошибка передачи команды адаптации 0x%02X.".format(cmd))
+                }
 
                 val reply = receiveBlockInternal(2500)
-                if (reply != null) {
-                    blockCounter = reply.counter
-                    sendBlockInternal(0x09)
+                    ?: return@withLock AdaptationResult(false, channel, value, "Таймаут ответа блока на команду $opName (канал %02d).".format(channel))
 
-                    if (reply.title == 0xE7) {
-                        return@withContext parseMeasuringBlock(reply.data, group, onLog)
+                when (reply.title) {
+                    0xE6 -> {
+                        val ch = if (reply.data.isNotEmpty()) (reply.data[0].toInt() and 0xFF) else channel
+                        val decodedVal = if (reply.data.size >= 3) {
+                            ((reply.data[1].toInt() and 0xFF) shl 8) or (reply.data[2].toInt() and 0xFF)
+                        } else if (reply.data.size == 2) {
+                            reply.data[1].toInt() and 0xFF
+                        } else {
+                            value
+                        }
+                        AdaptationResult(
+                            success = true,
+                            channel = ch,
+                            value = decodedVal,
+                            message = "$opName успешно: Канал %02d = $decodedVal".format(ch)
+                        )
+                    }
+                    0x09 -> {
+                        AdaptationResult(
+                            success = true,
+                            channel = channel,
+                            value = value,
+                            message = "$opName выполнено: Канал %02d (подтверждение 0x09)".format(channel)
+                        )
+                    }
+                    0x0A -> {
+                        AdaptationResult(
+                            success = false,
+                            channel = channel,
+                            value = value,
+                            message = "Канал %02d недоступен или операция отклонена блоком (NAK 0x0A).".format(channel)
+                        )
+                    }
+                    else -> {
+                        AdaptationResult(
+                            success = false,
+                            channel = channel,
+                            value = value,
+                            message = "Ответ блока на адаптацию: Title 0x%02X".format(reply.title)
+                        )
                     }
                 }
-            } catch (t: Throwable) {}
-            null
+            } catch (t: Throwable) {
+                AdaptationResult(false, channel, value, "Ошибка адаптации: ${t.message ?: t.javaClass.simpleName}")
+            }
         }
     }
 
-    private fun parseMeasuringBlock(data: ByteArray, group: Int, onLog: (String) -> Unit): LiveMeasurement {
+    /**
+     * Полное декодирование измерительных блоков KWP1281 (0xE7 / 0xF4 / 0x02)
+     */
+    private fun parseMeasuringBlock(data: ByteArray, group: Int): LiveMeasurement {
         val raw = data.map { it.toInt() and 0xFF }
 
+        // Вариант 1: 10 сырых байт группы 000 Bosch Mono-Motronic 1.2.3
         if (data.size == 10) {
             val coolantRaw = raw[0]
             val throttleRaw = raw[1]
             val rpmRaw = raw[2]
             val lambdaRaw = raw[4]
-            val batteryRaw = raw[7]
+            val batteryRaw = raw[8]
 
-            val coolantC = (coolantRaw * 0.9).toInt() + 15
-            val rpm = rpmRaw * 10
-            val lambdaV = "%.2f".format((lambdaRaw / 255.0)).replace(',', '.').toDoubleOrNull() ?: 0.45
-            val throttleAngle = "%.1f".format(throttleRaw * 0.8).replace(',', '.').toDoubleOrNull() ?: 0.0
-            val batteryV = "%.1f".format(batteryRaw * 0.07).replace(',', '.').toDoubleOrNull() ?: 13.8
+            val coolantC = (coolantRaw * 0.65 - 30.0).toInt()
+            val rpm = if (rpmRaw <= 45) rpmRaw * 25 else rpmRaw * 10
+            val lambdaV = (lambdaRaw * 0.005).let { "%.2f".format(it).replace(',', '.').toDoubleOrNull() }
+            val throttleAngle = (throttleRaw * 0.35).let { "%.1f".format(it).replace(',', '.').toDoubleOrNull() }
+            val batteryV = (batteryRaw * 0.08).let { "%.1f".format(it).replace(',', '.').toDoubleOrNull() }
+
+            val fields = raw.mapIndexed { i, v ->
+                MeasuredField(i + 1, "%03d".format(v), 0, 0, v)
+            }
 
             return LiveMeasurement(
                 group = group,
@@ -650,44 +915,191 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 lambdaVoltage = lambdaV,
                 throttleAngle = throttleAngle,
                 batteryVoltage = batteryV,
-                rawValues = raw
+                rawValues = raw,
+                fields = fields
             )
         }
 
+        // Вариант 2: Тройки [формула][A][B] (до 4 полей в блоке 0xE7 / 0xF4)
         var parsedRpm: Int? = null
-        var parsedTemp: Int? = null
-        var parsedLambda: Double? = null
+        var parsedCoolantTemp: Int? = null
+        var parsedAirTemp: Int? = null
+        var parsedLambdaV: Double? = null
+        var parsedLambdaCorr: Double? = null
         var parsedThrottle: Double? = null
-        var parsedVolt: Double? = null
+        var parsedBatteryV: Double? = null
+        var parsedInjMs: Double? = null
 
+        val fields = mutableListOf<MeasuredField>()
         var idx = 0
         var itemNum = 1
+
         while (idx + 2 < data.size && itemNum <= 4) {
             val formula = raw[idx]
             val a = raw[idx + 1]
             val b = raw[idx + 2]
             idx += 3
 
-            when (formula) {
-                0x01 -> parsedRpm = (a * 0.2 * b).toInt().coerceAtLeast(a * 25)
-                0x02 -> if (parsedThrottle == null) parsedThrottle = a * 0.5
-                0x05, 0x0F, 0x24 -> parsedTemp = a - 50
-                0x08, 0x15 -> parsedLambda = "%.2f".format(0.001 * a * b).replace(',', '.').toDoubleOrNull()
-                0x09, 0x29 -> parsedVolt = "%.1f".format((a * 256 + b) / 1000.0).replace(',', '.').toDoubleOrNull()
-                0x19 -> parsedThrottle = "%.1f".format(a * 0.5).replace(',', '.').toDoubleOrNull()
-                0x2B -> parsedRpm = a * 25
+            val decoded = decodeFormula(formula, a, b)
+            fields.add(MeasuredField(itemNum, decoded.displayText, formula, a, b))
+
+            when (decoded.kind) {
+                FieldKind.RPM -> if (parsedRpm == null) parsedRpm = decoded.numeric.toInt()
+                FieldKind.TEMP -> {
+                    // В группах 1, 4(поле 3), 5 это ОЖ; в группах 2(поле 4), 3(поле 4), 4(поле 4) это воздух
+                    if (group == 1 || (group == 5 && itemNum == 2) || (group == 4 && itemNum == 3)) {
+                        parsedCoolantTemp = decoded.numeric.toInt()
+                    } else if (parsedCoolantTemp == null && itemNum <= 2) {
+                        parsedCoolantTemp = decoded.numeric.toInt()
+                    } else {
+                        parsedAirTemp = decoded.numeric.toInt()
+                    }
+                }
+                FieldKind.VOLTAGE -> {
+                    if (decoded.numeric in 0.0..1.8) {
+                        parsedLambdaV = decoded.numeric
+                    } else if (decoded.numeric > 5.0) {
+                        parsedBatteryV = decoded.numeric
+                    }
+                }
+                FieldKind.LAMBDA_PCT -> parsedLambdaCorr = decoded.numeric
+                FieldKind.ANGLE -> {
+                    // В группе 3 поле 3 — угол открытия дроссельной заслонки (ДПДЗ G69)
+                    if (group == 3 || parsedThrottle == null) {
+                        parsedThrottle = decoded.numeric
+                    }
+                }
+                FieldKind.LOAD_PCT -> {
+                    if (group == 3 && itemNum == 2 && parsedThrottle == null) {
+                        // Если угол отдельно не пришёл, но есть нагрузка дросселя
+                    }
+                }
+                FieldKind.INJ_MS -> parsedInjMs = decoded.numeric
+                else -> {}
             }
             itemNum++
         }
 
         return LiveMeasurement(
             group = group,
-            rpm = parsedRpm ?: 850,
-            coolantTemp = parsedTemp ?: 88,
-            lambdaVoltage = parsedLambda ?: 0.45,
-            throttleAngle = parsedThrottle ?: 2.4,
-            batteryVoltage = parsedVolt ?: 14.1,
-            rawValues = raw
+            rpm = parsedRpm,
+            coolantTemp = parsedCoolantTemp,
+            lambdaVoltage = parsedLambdaV,
+            lambdaCorrection = parsedLambdaCorr,
+            throttleAngle = parsedThrottle,
+            batteryVoltage = parsedBatteryV,
+            intakeAirTemp = parsedAirTemp,
+            injectionTimeMs = parsedInjMs,
+            rawValues = raw,
+            fields = fields
         )
+    }
+
+    private enum class FieldKind {
+        RPM, TEMP, VOLTAGE, LAMBDA_PCT, ANGLE, LOAD_PCT, INJ_MS, SPEED, BITS, OTHER
+    }
+
+    private data class DecodedFormula(
+        val numeric: Double,
+        val displayText: String,
+        val kind: FieldKind
+    )
+
+    private fun decodeFormula(formula: Int, a: Int, b: Int): DecodedFormula {
+        return when (formula) {
+            0x01 -> {
+                val v = 0.2 * a * b
+                DecodedFormula(v, "${v.toInt()} об/мин", FieldKind.RPM)
+            }
+            0x02 -> {
+                val v = 0.002 * a * b
+                DecodedFormula(v, "%.1f %%".format(v), FieldKind.LOAD_PCT)
+            }
+            0x03 -> {
+                val v = 0.002 * a * b
+                DecodedFormula(v, "%.1f°".format(v), FieldKind.ANGLE)
+            }
+            0x04 -> {
+                val v = abs(b - 127) * 0.01 * a
+                val dir = if (b < 127) "до ВМТ" else "после ВМТ"
+                DecodedFormula(v, "%.1f° $dir".format(v), FieldKind.OTHER)
+            }
+            0x05 -> {
+                val v = a * (b - 100) * 0.1
+                DecodedFormula(v, "%.1f °C".format(v), FieldKind.TEMP)
+            }
+            0x06, 0x15, 0x42 -> {
+                val v = 0.001 * a * b
+                DecodedFormula(v, "%.2f В".format(v), FieldKind.VOLTAGE)
+            }
+            0x07 -> {
+                val v = 0.01 * a * b
+                DecodedFormula(v, "%.0f км/ч".format(v), FieldKind.SPEED)
+            }
+            0x08 -> {
+                val v = 0.1 * a * b
+                DecodedFormula(v, "%.1f".format(v), FieldKind.OTHER)
+            }
+            0x09 -> {
+                val v = (b - 127) * 0.02 * a
+                DecodedFormula(v, "%.1f°".format(v), FieldKind.ANGLE)
+            }
+            0x0B -> {
+                val v = 0.0001 * a * b + 0.5
+                DecodedFormula(v, "%.3f λ".format(v), FieldKind.LAMBDA_PCT)
+            }
+            0x0F -> {
+                val v = 0.01 * a * b
+                DecodedFormula(v, "%.2f мс".format(v), FieldKind.INJ_MS)
+            }
+            0x10 -> {
+                val bin = Integer.toBinaryString(b).padStart(8, '0')
+                DecodedFormula(b.toDouble(), bin, FieldKind.BITS)
+            }
+            0x14 -> {
+                val v = a * (b - 128) / 128.0
+                DecodedFormula(v, "%.1f %%".format(v), FieldKind.LAMBDA_PCT)
+            }
+            0x16 -> {
+                val v = 0.001 * a * b
+                DecodedFormula(v, "%.2f мс".format(v), FieldKind.INJ_MS)
+            }
+            0x17 -> {
+                val v = (b / 256.0) * a
+                DecodedFormula(v, "%.1f %%".format(v), FieldKind.LOAD_PCT)
+            }
+            0x1A -> {
+                val v = (b - a).toDouble()
+                DecodedFormula(v, "%.0f °C".format(v), FieldKind.TEMP)
+            }
+            0x1B -> {
+                val v = abs(b - 128) * 0.01 * a
+                DecodedFormula(v, "%.1f°".format(v), FieldKind.ANGLE)
+            }
+            0x1E -> {
+                val v = (b / 12.0) * a
+                DecodedFormula(v, "%.1f°".format(v), FieldKind.ANGLE)
+            }
+            0x1F -> {
+                val v = (b / 2560.0) * a
+                DecodedFormula(v, "%.1f °C".format(v), FieldKind.TEMP)
+            }
+            0x21 -> {
+                val v = if (a == 0) 100.0 * b else (100.0 * b / a)
+                DecodedFormula(v, "%.1f %%".format(v), FieldKind.LOAD_PCT)
+            }
+            0x2B -> {
+                val v = a * b * 0.001
+                DecodedFormula(v, "%.2f В".format(v), FieldKind.VOLTAGE)
+            }
+            0x43 -> {
+                val v = 0.1 * a * b
+                DecodedFormula(v, "%.1f°".format(v), FieldKind.ANGLE)
+            }
+            else -> {
+                val v = a * 0.1 * b
+                DecodedFormula(v, "$a / $b", FieldKind.OTHER)
+            }
+        }
     }
 }

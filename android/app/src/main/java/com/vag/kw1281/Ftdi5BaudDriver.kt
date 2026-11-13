@@ -13,16 +13,14 @@ import java.util.ArrayDeque
 
 /**
  * Высокоточный аппаратный драйвер FTDI FT232 для шины K-Line / VAG KWP1281.
- * 
+ *
  * Ключевые особенности надёжности:
- * 1. 5-бодовая посылка формируется через стандартный аппаратный Break (setBreak),
- *    без использования опасного SIO_SET_BITMODE и bulk-записей, вызывавших сброс FTDI
- *    и зависание USB OTG ("USB отключен").
- * 2. Точный абсолютный дедлайн на 200.0 мс на бит (start + N * 200ms) без накапливания ошибки.
+ * 1. 5-бодовая посылка формируется через стандартный аппаратный Break (setBreak).
+ * 2. Абсолютный дедлайн 200.0 мс на бит (start + N * 200ms) без накопления ошибки.
  * 3. Пауза 250 мс перед стартом, стоп-бит 200 мс, пауза 25 мс до чтения ответа.
- * 4. Удержание линий DTR/RTS (питание трансивера K-Line).
- * 5. Буферизация FTDI через 256-байтный буфер (обход 2-байтного заголовка модема D2XX).
- * 6. Алгоритм isEchoOrComplement для надёжной фильтрации однопроводного K-Line эхо.
+ * 4. Удержание линий DTR/RTS (питание трансивера K-Line) и FTDI Latency Timer = 2 мс.
+ * 5. Буферизация FTDI через 256-байтный буфер с поддержкой unreadByte (возврат чужого байта в очередь).
+ * 6. Фильтрация однопроводного K-Line эхо (isEchoOrComplement) без потери входящих байтов от ЭБУ.
  */
 class Ftdi5BaudDriver(
     private val usbManager: UsbManager,
@@ -96,8 +94,6 @@ class Ftdi5BaudDriver(
      */
     fun setPinState(high: Boolean) {
         try {
-            // В FTDI setBreak(true) принудительно прижимает TX к 0 В (Space)
-            // setBreak(false) отпускает TX в логическую 1 (Mark, 12 В на K-Line)
             port?.setBreak(!high)
         } catch (t: Throwable) {
             lastError = "setBreak error: ${t.message}"
@@ -136,9 +132,9 @@ class Ftdi5BaudDriver(
         try {
             // 1. Убеждаемся, что режим UART установлен и линия в состоянии Idle (HIGH, 12 В)
             setUartMode(targetBaud)
-            setPinState(true) // Break OFF -> TX = 12 В Idle
+            setPinState(true)
 
-            // 2. Пауза перед стартом: ~250 мс (согласно декомпилированному libkwp1281)
+            // 2. Пауза перед стартом: ~250 мс
             Thread.sleep(250)
 
             onLog("5 бод: посылка адреса 0x%02X (200.0 мс/бит, 7O1)...".format(address))
@@ -171,7 +167,6 @@ class Ftdi5BaudDriver(
             }
 
             // Шаг 9. Бит чётности: TX = !(parity) -> нечётная чётность (odd), 200 мс
-            // Для адреса 0x01: сумма единиц = 1 (нечётное), значит бит чётности = 0 -> LOW (0 В)
             val parityBit = if (parity != 0) 0 else 1
             setPinState(parityBit == 1)
             waitExactDeadline(9)
@@ -180,7 +175,7 @@ class Ftdi5BaudDriver(
             setPinState(true)
             waitExactDeadline(10)
 
-            // Шаг 11. Дополнительная пауза после стопа: 25 мс (libkwp1281)
+            // Шаг 11. Дополнительная пауза после стопа: 25 мс
             Thread.sleep(25)
 
             // Шаг 12. Переключение UART на приём ответа от ЭБУ (8N1)
@@ -203,6 +198,12 @@ class Ftdi5BaudDriver(
         }
     }
 
+    private fun unreadByte(b: Int) {
+        synchronized(rxQueue) {
+            rxQueue.addFirst((b and 0xFF).toByte())
+        }
+    }
+
     /**
      * Побайтовое чтение из FTDI с таймаутом через 256-байтный буфер
      */
@@ -218,9 +219,13 @@ class Ftdi5BaudDriver(
         val start = System.currentTimeMillis()
         val tempBuf = ByteArray(256)
 
-        while (System.currentTimeMillis() - start < timeoutMs) {
+        while (true) {
+            val remaining = (timeoutMs - (System.currentTimeMillis() - start)).toInt()
+            if (remaining <= 0) break
+            val slice = remaining.coerceIn(5, 30)
+
             try {
-                val readLen = p.read(tempBuf, 40)
+                val readLen = p.read(tempBuf, slice)
                 if (readLen > 0) {
                     synchronized(rxQueue) {
                         for (i in 0 until readLen) {
@@ -258,21 +263,28 @@ class Ftdi5BaudDriver(
             val start = System.currentTimeMillis()
             var gotEcho = false
 
-            while (System.currentTimeMillis() - start < timeoutMs) {
-                val rx = readByte(timeoutMs)
-                if (rx < 0) continue
+            while (true) {
+                val remaining = (timeoutMs - (System.currentTimeMillis() - start)).toInt()
+                if (remaining <= 0) break
+
+                val rx = readByte(remaining)
+                if (rx < 0) break
 
                 // 1. Проверяем, не является ли байт нашим собственным эхо на K-Line
                 if (!gotEcho && rx == sentVal) {
                     gotEcho = true
-                    continue // Эхо принято и отброшено, ждем ответ ЭБУ
+                    continue // Эхо принято и отброшено, ждем инверсный ответ ЭБУ
                 }
 
                 // 2. Проверяем, является ли байт побитовой инверсией (~byte)
                 if (rx == compExpected) {
-                    // Успешное подтверждение от ЭБУ
                     delay(3) // Межбайтная пауза ~3 мс по спецификации KWP1281
                     return@withContext true
+                }
+
+                // Повторное эхо пропускаем
+                if (rx == sentVal) {
+                    continue
                 }
             }
             delay(5)
@@ -281,27 +293,35 @@ class Ftdi5BaudDriver(
     }
 
     /**
-     * Отправка завершающего байта блока 0x03 (не подтверждается инверсией)
+     * Отправка завершающего байта блока 0x03 (не подтверждается инверсией).
+     * Аккуратно поглощает только собственное эхо 0x03; если прочитан другой байт (уже ответ ЭБУ),
+     * возвращает его в начало очереди rxQueue.
      */
     suspend fun sendEndMarker(timeoutMs: Int = 300) = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext
         try {
             p.write(byteArrayOf(0x03), timeoutMs)
-            // Отбрасываем возможное loopback-эхо от 0x03
-            readByte(40)
+            val rx = readByte(35)
+            if (rx >= 0 && rx != 0x03) {
+                unreadByte(rx)
+            }
             delay(6) // Межблочная пауза ~5–8 мс по спецификации KWP1281
         } catch (t: Throwable) {}
     }
 
     /**
-     * Отправка байта без подтверждения (для инверсии ~KW2 или подтверждения входящего байта)
+     * Отправка байта без подтверждения (для инверсии ~KW2 или подтверждения входящего байта).
+     * Поглощает только собственное эхо sentVal; любой иной байт возвращается в очередь.
      */
     suspend fun writeRawByte(b: Byte, timeoutMs: Int = 300) = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext
+        val sentVal = b.toInt() and 0xFF
         try {
             p.write(byteArrayOf(b), timeoutMs)
-            // Отбрасываем собственное loopback-эхо
-            readByte(40)
+            val rx = readByte(35)
+            if (rx >= 0 && rx != sentVal) {
+                unreadByte(rx)
+            }
         } catch (t: Throwable) {}
     }
 
