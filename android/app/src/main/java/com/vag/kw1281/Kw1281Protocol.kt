@@ -34,6 +34,9 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     var isSessionActive: Boolean = false
         private set
 
+    @Volatile
+    var isKeepAlivePaused: Boolean = false
+
     private val busMutex = Mutex()
     private var keepAliveJob: Job? = null
     private var consecutiveKeepAliveErrors = 0
@@ -61,6 +64,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val coolantTemp: Int? = null,
         val lambdaVoltage: Double? = null,
         val lambdaCorrection: Double? = null,
+        val lambdaFactor: Double? = null,
         val throttleAngle: Double? = null,
         val batteryVoltage: Double? = null,
         val intakeAirTemp: Int? = null,
@@ -260,6 +264,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             try {
                 stopKeepAliveInternal()
                 isSessionActive = false
+                isKeepAlivePaused = false
                 consecutiveKeepAliveErrors = 0
                 preferredGroupReadCmd = null
                 blockCounter = 0
@@ -416,9 +421,10 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             while (isActive && isSessionActive) {
                 delay(450)
                 if (!isSessionActive) break
+                if (isKeepAlivePaused) continue
                 try {
                     busMutex.withLock {
-                        if (isSessionActive) {
+                        if (isSessionActive && !isKeepAlivePaused) {
                             val ok = sendBlockInternal(0x09)
                             val reply = if (ok) receiveBlockInternal(1000) else null
                             if (ok && reply != null) {
@@ -435,6 +441,22 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     consecutiveKeepAliveErrors++
                 }
             }
+        }
+    }
+
+    /**
+     * Выход из режима Базовых установок: возобновление keep-alive 0x09
+     * и отправка одиночного ACK 0x09 для возврата ЭБУ в штатный режим.
+     */
+    suspend fun finishBasicSettings() = withContext(Dispatchers.IO) {
+        isKeepAlivePaused = false
+        busMutex.withLock {
+            try {
+                if (isSessionActive) {
+                    sendBlockInternal(0x09)
+                    receiveBlockInternal(1000)
+                }
+            } catch (t: Throwable) {}
         }
     }
 
@@ -826,7 +848,9 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     }
 
     /**
-     * Базовые установки (Команда 0x28 [group], для ранних блоков фоллбек 0x28 без аргументов / 0x11)
+     * Базовые установки (Команда 0x28 [group], для ранних блоков фоллбек 0x11)
+     * Во время работы в базовых установках keep-alive 0x09 приостанавливается,
+     * так как блок 0x09 выводит Mono-Motronic 1.2.3 обратно в обычный режим.
      */
     suspend fun enterBasicSettings(group: Int = 0, onLog: (String) -> Unit): BasicSettingsResult = withContext(Dispatchers.IO) {
         busMutex.withLock {
@@ -839,22 +863,32 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     0x28 to byteArrayOf(group.toByte())
                 )
                 if (group == 0) {
-                    attempts.add(0x28 to ByteArray(0))
                     attempts.add(0x11 to ByteArray(0))
                 }
 
                 var sawNak = false
                 var lastTitle = -1
+                val attemptTrace = mutableListOf<String>()
 
                 for ((attemptIdx, pair) in attempts.withIndex()) {
                     val (cmd, payload) = pair
-                    if (attemptIdx > 0) delay(50)
-                    if (!sendBlockInternal(cmd, payload)) continue
-                    val reply = receiveBlockInternal(2000) ?: continue
+                    if (attemptIdx > 0) delay(60)
+                    val cmdLabel = if (payload.isEmpty()) "0x%02X".format(cmd) else "0x%02X %02X".format(cmd, payload[0].toInt() and 0xFF)
+
+                    if (!sendBlockInternal(cmd, payload)) {
+                        attemptTrace.add("$cmdLabel→ошибка отправки")
+                        continue
+                    }
+                    val reply = receiveBlockInternal(2000)
+                    if (reply == null) {
+                        attemptTrace.add("$cmdLabel→таймаут")
+                        continue
+                    }
                     lastTitle = reply.title
 
                     when {
                         isMeasuringBlockTitle(reply.title) -> {
+                            isKeepAlivePaused = true
                             val m = parseMeasuringBlock(reply.data, group)
                             return@withContext BasicSettingsResult(
                                 success = true,
@@ -863,6 +897,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                             )
                         }
                         reply.title == 0x09 -> {
+                            isKeepAlivePaused = true
                             return@withContext BasicSettingsResult(
                                 success = true,
                                 measurement = LiveMeasurement(group = group),
@@ -878,28 +913,34 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                         }
                         reply.title == 0x0A -> {
                             sawNak = true
+                            attemptTrace.add("$cmdLabel→NAK(0x0A)")
+                        }
+                        else -> {
+                            val hex = reply.data.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
+                            attemptTrace.add("$cmdLabel→Title=0x%02X[$hex]".format(reply.title))
                         }
                     }
                 }
 
+                val traceText = attemptTrace.joinToString("; ")
                 if (sawNak) {
                     return@withContext BasicSettingsResult(
                         success = false,
                         isNak = true,
-                        message = "ЭБУ отклонил Базовые установки группы %03d (NAK 0x0A).".format(group)
+                        message = "ЭБУ отклонил Базовые установки группы %03d ($traceText).".format(group)
                     )
                 }
 
                 if (lastTitle >= 0) {
                     return@withContext BasicSettingsResult(
                         success = false,
-                        message = "Неожиданный ответ ЭБУ на Базовые установки: Title 0x%02X".format(lastTitle)
+                        message = "Неожиданный ответ ЭБУ на Базовые установки ($traceText)"
                     )
                 }
 
                 BasicSettingsResult(
                     success = false,
-                    message = "Таймаут ответа ЭБУ на Базовые установки (0x28)."
+                    message = "Таймаут ответа ЭБУ на Базовые установки ($traceText)."
                 )
             } catch (t: Throwable) {
                 BasicSettingsResult(false, message = "Ошибка входа в Базовые установки: ${t.message ?: t.javaClass.simpleName}")
@@ -1053,6 +1094,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         var parsedAirTemp: Int? = null
         var parsedLambdaV: Double? = null
         var parsedLambdaCorr: Double? = null
+        var parsedLambdaFactor: Double? = null
         var parsedThrottle: Double? = null
         var parsedBatteryV: Double? = null
         var parsedInjMs: Double? = null
@@ -1089,7 +1131,16 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                         parsedBatteryV = decoded.numeric
                     }
                 }
-                FieldKind.LAMBDA_PCT -> parsedLambdaCorr = decoded.numeric
+                FieldKind.LAMBDA_PCT -> {
+                    if (group != 5) {
+                        parsedLambdaCorr = decoded.numeric
+                    }
+                }
+                FieldKind.LAMBDA_FACTOR -> {
+                    if (group != 5) {
+                        parsedLambdaFactor = decoded.numeric
+                    }
+                }
                 FieldKind.ANGLE -> {
                     // В группе 3 поле 3 — угол открытия дроссельной заслонки (ДПДЗ G69)
                     if (group == 3 || parsedThrottle == null) {
@@ -1097,22 +1148,17 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     }
                 }
                 FieldKind.LOAD_PCT -> {
-                    // В группе 001 / 005 поле 3 у Mono-Motronic может передавать лямбда-коррекцию в %
-                    if ((group == 1 || group == 5) && itemNum == 3 && parsedLambdaCorr == null) {
-                        parsedLambdaCorr = decoded.numeric
-                    }
+                    // LOAD_PCT (формулы 0x02/0x17/0x21) — это нагрузка/скважность/адаптация, не подменяем им лямбду!
                 }
                 FieldKind.INJ_MS -> parsedInjMs = decoded.numeric
                 else -> {
-                    // Запасная интерпретация по стандартной позиции поля Группы 001 / 005,
+                    // Запасная интерпретация по стандартной позиции поля Группы 001,
                     // если ЭБУ прислал нестандартный код формулы
                     if (group == 1 && itemNum == 2 && parsedCoolantTemp == null && decoded.numeric in -40.0..140.0) {
                         parsedCoolantTemp = decoded.numeric.toInt()
-                    } else if ((group == 1 || group == 5) && itemNum == 3 && parsedLambdaV == null && parsedLambdaCorr == null) {
+                    } else if (group == 1 && itemNum == 3 && parsedLambdaV == null && parsedLambdaCorr == null && parsedLambdaFactor == null) {
                         if (decoded.numeric in 0.0..1.5) {
                             parsedLambdaV = decoded.numeric
-                        } else if (decoded.numeric in -50.0..150.0) {
-                            parsedLambdaCorr = decoded.numeric
                         }
                     }
                 }
@@ -1126,6 +1172,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             coolantTemp = parsedCoolantTemp,
             lambdaVoltage = parsedLambdaV,
             lambdaCorrection = parsedLambdaCorr,
+            lambdaFactor = parsedLambdaFactor,
             throttleAngle = parsedThrottle,
             batteryVoltage = parsedBatteryV,
             intakeAirTemp = parsedAirTemp,
@@ -1136,7 +1183,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     }
 
     private enum class FieldKind {
-        RPM, TEMP, VOLTAGE, LAMBDA_PCT, ANGLE, LOAD_PCT, INJ_MS, SPEED, BITS, OTHER
+        RPM, TEMP, VOLTAGE, LAMBDA_PCT, LAMBDA_FACTOR, ANGLE, LOAD_PCT, INJ_MS, SPEED, BITS, OTHER
     }
 
     private data class DecodedFormula(
@@ -1190,7 +1237,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             }
             0x0B -> {
                 val v = 0.0001 * a * b + 0.5
-                DecodedFormula(v, "%.3f λ".format(v), FieldKind.LAMBDA_PCT)
+                DecodedFormula(v, "%.3f λ".format(v), FieldKind.LAMBDA_FACTOR)
             }
             0x0D -> {
                 val v = (b - 127) * 0.001 * a

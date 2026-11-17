@@ -621,6 +621,7 @@ class MainActivity : AppCompatActivity() {
             var lastTemp: Int? = null
             var lastLambdaV: Double? = null
             var lastLambdaCorr: Double? = null
+            var lastLambdaFactor: Double? = null
             var lastThrottle: Double? = null
             var lastAirTemp: Int? = null
             var lastBatteryV: Double? = null
@@ -647,6 +648,7 @@ class MainActivity : AppCompatActivity() {
                                 m1.coolantTemp?.let { lastTemp = it }
                                 m1.lambdaVoltage?.let { lastLambdaV = it }
                                 m1.lambdaCorrection?.let { lastLambdaCorr = it }
+                                m1.lambdaFactor?.let { lastLambdaFactor = it }
                                 g1Fields = m1.fields
                             } else {
                                 lastErr = m1.errorMessage
@@ -668,7 +670,7 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
 
-                        // Если ДТОЖ или Лямбда не получены из Группы 001 — добираем из Групп 004 и 005
+                        // Если ДТОЖ не получен из Группы 001 — добираем из Группы 004
                         if (!useGroupZeroOnly && g4Supported && (lastTemp == null || cycleCount == 0) && isActive && protocol.isSessionActive) {
                             delay(50)
                             val m4 = protocol.readMeasuringGroup(4) { }
@@ -682,14 +684,14 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
 
-                        if (!useGroupZeroOnly && g5Supported && (lastLambdaV == null || (lastLambdaCorr == null && cycleCount % 2 == 0)) && isActive && protocol.isSessionActive) {
+                        // Группа 005 на Mono-Motronic содержит адаптацию смеси (не подменяет лямбда-коррекцию из Гр. 001!)
+                        if (!useGroupZeroOnly && g5Supported && cycleCount % 4 == 0 && isActive && protocol.isSessionActive) {
                             delay(50)
                             val m5 = protocol.readMeasuringGroup(5) { }
                             if (m5 != null && !m5.isUnsupportedNak && m5.errorMessage == null) {
                                 gotValid = true
                                 m5.coolantTemp?.let { if (lastTemp == null) lastTemp = it }
-                                m5.lambdaVoltage?.let { lastLambdaV = it }
-                                m5.lambdaCorrection?.let { lastLambdaCorr = it }
+                                m5.lambdaVoltage?.let { if (lastLambdaV == null) lastLambdaV = it }
                                 g5Fields = m5.fields
                             } else if (m5?.isUnsupportedNak == true) {
                                 g5Supported = false
@@ -709,8 +711,8 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    // Фоллбек на Группу 000 (10 байт Mono-Motronic): если Группа 001 отклонена ИЛИ ДТОЖ/Лямбда не удалось прочитать из групп 001..005
-                    val needGroupZeroFallback = useGroupZeroOnly || lastTemp == null || (lastLambdaV == null && lastLambdaCorr == null)
+                    // Фоллбек на Группу 000 (10 байт Mono-Motronic): если Группа 001 отклонена ИЛИ ДТОЖ/Лямбда не удалось прочитать
+                    val needGroupZeroFallback = useGroupZeroOnly || lastTemp == null || (lastLambdaV == null && lastLambdaCorr == null && lastLambdaFactor == null)
                     if (needGroupZeroFallback && isActive && protocol.isSessionActive) {
                         delay(50)
                         val m0 = protocol.readMeasuringGroup(0) { }
@@ -730,7 +732,7 @@ class MainActivity : AppCompatActivity() {
 
                     if (gotValid) {
                         consecutiveErrors = 0
-                        updateGaugeViews(lastRpm, lastTemp, lastLambdaV, lastLambdaCorr, lastThrottle)
+                        updateGaugeViews(lastRpm, lastTemp, lastLambdaV, lastLambdaCorr, lastLambdaFactor, lastThrottle)
 
                         val sb = StringBuilder()
                         sb.append(if (useGroupZeroOnly) "ЖИВЫЕ ПАРАМЕТРЫ (ГРУППА 000):\n" else "ЖИВЫЕ ПАРАМЕТРЫ ДАТЧИКОВ:\n")
@@ -739,6 +741,7 @@ class MainActivity : AppCompatActivity() {
                         val lambdaText = when {
                             lastLambdaV != null -> "%.2f В".format(lastLambdaV)
                             lastLambdaCorr != null -> "%.1f %% (коррекция)".format(lastLambdaCorr)
+                            lastLambdaFactor != null -> "%.3f λ".format(lastLambdaFactor)
                             else -> "---"
                         }
                         sb.append("• Лямбда-зонд (G39): ").append(lambdaText).append("\n")
@@ -757,7 +760,7 @@ class MainActivity : AppCompatActivity() {
                             sb.append("\nГруппа 004: ").append(g4Fields.joinToString(" | ") { it.valueText })
                         }
                         if (g5Fields.isNotEmpty()) {
-                            sb.append("\nГруппа 005: ").append(g5Fields.joinToString(" | ") { it.valueText })
+                            sb.append("\nАдаптация (Гр.005): ").append(g5Fields.joinToString(" | ") { it.valueText })
                         }
                         if (g0Raw.isNotEmpty()) {
                             sb.append("\nБайты 000: ").append(g0Raw.joinToString(" ") { "%03d".format(it) })
@@ -799,6 +802,7 @@ class MainActivity : AppCompatActivity() {
         temp: Int?,
         lambdaV: Double?,
         lambdaCorr: Double?,
+        lambdaFactor: Double?,
         throttle: Double?
     ) {
         runOnUiThread {
@@ -810,6 +814,9 @@ class MainActivity : AppCompatActivity() {
             } else if (lambdaCorr != null) {
                 tvGaugeLambda.text = "%.1f".format(lambdaCorr)
                 tvGaugeLambdaUnit.text = "% корр."
+            } else if (lambdaFactor != null) {
+                tvGaugeLambda.text = "%.3f".format(lambdaFactor)
+                tvGaugeLambdaUnit.text = "λ факт."
             }
             throttle?.let { tvGaugeThrottle.text = "%.1f".format(it) }
         }
@@ -874,6 +881,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val protocol = kwProtocol ?: return
+        val wasLiveRunning = liveStreamJob != null
         stopLiveStream()
         layoutActuatorTest.visibility = View.GONE
         layoutAdaptation.visibility = View.GONE
@@ -885,10 +893,11 @@ class MainActivity : AppCompatActivity() {
         basicSettingsJob = lifecycleScope.launch {
             var activeGroup = 0
             try {
+                if (wasLiveRunning) delay(80)
                 var initialResult = protocol.enterBasicSettings(0) { }
                 var fallbackMsg: String? = null
-                if (!initialResult.success && protocol.isSessionActive && (initialResult.isNak || initialResult.message.contains("Таймаут") || initialResult.message.contains("отклонил"))) {
-                    delay(60)
+                if (!initialResult.success && protocol.isSessionActive) {
+                    delay(80)
                     val fallbackGroup1 = protocol.enterBasicSettings(1) { }
                     if (fallbackGroup1.success) {
                         activeGroup = 1
@@ -927,7 +936,7 @@ class MainActivity : AppCompatActivity() {
 
                     val m = res.measurement
                     if (m != null) {
-                        updateGaugeViews(m.rpm, m.coolantTemp, m.lambdaVoltage, m.lambdaCorrection, m.throttleAngle)
+                        updateGaugeViews(m.rpm, m.coolantTemp, m.lambdaVoltage, m.lambdaCorrection, m.lambdaFactor, m.throttleAngle)
                     }
 
                     val extraLine = when {
@@ -939,17 +948,23 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     setResultText("🔧 РЕЖИМ БАЗОВЫХ УСТАНОВОК (Группа %03d) АКТИВЕН!\n\n".format(activeGroup) +
-                            "• ЭБУ зафиксировал базовый угол опережения зажигания.\n" +
+                            "• ЭБУ зафиксировал базовый угол опережения зажигания (keep-alive 0x09 приостановлен).\n" +
                             "• Для регулировки УОЗ 6° до ВМТ проверьте прогрев (>80°C) и работайте стробоскопом по метке маховика.\n" +
                             "• $extraLine\n\n" +
                             "Нажмите «СТОП БАЗОВЫЕ» для выхода из режима.")
 
-                    delay(450)
+                    delay(250)
                 }
             } catch (t: Throwable) {
                 // Остановка по отмене
             } finally {
                 basicSettingsJob = null
+                protocol.isKeepAlivePaused = false
+                lifecycleScope.launch {
+                    try {
+                        protocol.finishBasicSettings()
+                    } catch (_: Throwable) {}
+                }
                 runOnUiThread {
                     btnBasicSettings.text = "БАЗОВЫЕ (УОЗ 6°)"
                     btnBasicSettings.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0D9488"))
@@ -961,6 +976,7 @@ class MainActivity : AppCompatActivity() {
     private fun stopBasicSettingsStream() {
         basicSettingsJob?.cancel()
         basicSettingsJob = null
+        kwProtocol?.isKeepAlivePaused = false
         runOnUiThread {
             btnBasicSettings.text = "БАЗОВЫЕ (УОЗ 6°)"
             btnBasicSettings.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0D9488"))

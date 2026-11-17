@@ -468,6 +468,9 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     var isSessionActive: Boolean = false
         private set
 
+    @Volatile
+    var isKeepAlivePaused: Boolean = false
+
     private val busMutex = Mutex()
     private var keepAliveJob: Job? = null
     private var consecutiveKeepAliveErrors = 0
@@ -495,6 +498,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val coolantTemp: Int? = null,
         val lambdaVoltage: Double? = null,
         val lambdaCorrection: Double? = null,
+        val lambdaFactor: Double? = null,
         val throttleAngle: Double? = null,
         val batteryVoltage: Double? = null,
         val intakeAirTemp: Int? = null,
@@ -694,6 +698,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             try {
                 stopKeepAliveInternal()
                 isSessionActive = false
+                isKeepAlivePaused = false
                 consecutiveKeepAliveErrors = 0
                 preferredGroupReadCmd = null
                 blockCounter = 0
@@ -850,9 +855,10 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             while (isActive && isSessionActive) {
                 delay(450)
                 if (!isSessionActive) break
+                if (isKeepAlivePaused) continue
                 try {
                     busMutex.withLock {
-                        if (isSessionActive) {
+                        if (isSessionActive && !isKeepAlivePaused) {
                             val ok = sendBlockInternal(0x09)
                             val reply = if (ok) receiveBlockInternal(1000) else null
                             if (ok && reply != null) {
@@ -869,6 +875,22 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     consecutiveKeepAliveErrors++
                 }
             }
+        }
+    }
+
+    /**
+     * Выход из режима Базовых установок: возобновление keep-alive 0x09
+     * и отправка одиночного ACK 0x09 для возврата ЭБУ в штатный режим.
+     */
+    suspend fun finishBasicSettings() = withContext(Dispatchers.IO) {
+        isKeepAlivePaused = false
+        busMutex.withLock {
+            try {
+                if (isSessionActive) {
+                    sendBlockInternal(0x09)
+                    receiveBlockInternal(1000)
+                }
+            } catch (t: Throwable) {}
         }
     }
 
@@ -1260,7 +1282,9 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     }
 
     /**
-     * Базовые установки (Команда 0x28 [group], для ранних блоков фоллбек 0x28 без аргументов / 0x11)
+     * Базовые установки (Команда 0x28 [group], для ранних блоков фоллбек 0x11)
+     * Во время работы в базовых установках keep-alive 0x09 приостанавливается,
+     * так как блок 0x09 выводит Mono-Motronic 1.2.3 обратно в обычный режим.
      */
     suspend fun enterBasicSettings(group: Int = 0, onLog: (String) -> Unit): BasicSettingsResult = withContext(Dispatchers.IO) {
         busMutex.withLock {
@@ -1273,22 +1297,32 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     0x28 to byteArrayOf(group.toByte())
                 )
                 if (group == 0) {
-                    attempts.add(0x28 to ByteArray(0))
                     attempts.add(0x11 to ByteArray(0))
                 }
 
                 var sawNak = false
                 var lastTitle = -1
+                val attemptTrace = mutableListOf<String>()
 
                 for ((attemptIdx, pair) in attempts.withIndex()) {
                     val (cmd, payload) = pair
-                    if (attemptIdx > 0) delay(50)
-                    if (!sendBlockInternal(cmd, payload)) continue
-                    val reply = receiveBlockInternal(2000) ?: continue
+                    if (attemptIdx > 0) delay(60)
+                    val cmdLabel = if (payload.isEmpty()) "0x%02X".format(cmd) else "0x%02X %02X".format(cmd, payload[0].toInt() and 0xFF)
+
+                    if (!sendBlockInternal(cmd, payload)) {
+                        attemptTrace.add("$cmdLabel→ошибка отправки")
+                        continue
+                    }
+                    val reply = receiveBlockInternal(2000)
+                    if (reply == null) {
+                        attemptTrace.add("$cmdLabel→таймаут")
+                        continue
+                    }
                     lastTitle = reply.title
 
                     when {
                         isMeasuringBlockTitle(reply.title) -> {
+                            isKeepAlivePaused = true
                             val m = parseMeasuringBlock(reply.data, group)
                             return@withContext BasicSettingsResult(
                                 success = true,
@@ -1297,6 +1331,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                             )
                         }
                         reply.title == 0x09 -> {
+                            isKeepAlivePaused = true
                             return@withContext BasicSettingsResult(
                                 success = true,
                                 measurement = LiveMeasurement(group = group),
@@ -1312,28 +1347,34 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                         }
                         reply.title == 0x0A -> {
                             sawNak = true
+                            attemptTrace.add("$cmdLabel→NAK(0x0A)")
+                        }
+                        else -> {
+                            val hex = reply.data.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
+                            attemptTrace.add("$cmdLabel→Title=0x%02X[$hex]".format(reply.title))
                         }
                     }
                 }
 
+                val traceText = attemptTrace.joinToString("; ")
                 if (sawNak) {
                     return@withContext BasicSettingsResult(
                         success = false,
                         isNak = true,
-                        message = "ЭБУ отклонил Базовые установки группы %03d (NAK 0x0A).".format(group)
+                        message = "ЭБУ отклонил Базовые установки группы %03d ($traceText).".format(group)
                     )
                 }
 
                 if (lastTitle >= 0) {
                     return@withContext BasicSettingsResult(
                         success = false,
-                        message = "Неожиданный ответ ЭБУ на Базовые установки: Title 0x%02X".format(lastTitle)
+                        message = "Неожиданный ответ ЭБУ на Базовые установки ($traceText)"
                     )
                 }
 
                 BasicSettingsResult(
                     success = false,
-                    message = "Таймаут ответа ЭБУ на Базовые установки (0x28)."
+                    message = "Таймаут ответа ЭБУ на Базовые установки ($traceText)."
                 )
             } catch (t: Throwable) {
                 BasicSettingsResult(false, message = "Ошибка входа в Базовые установки: \${t.message ?: t.javaClass.simpleName}")
@@ -1487,6 +1528,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         var parsedAirTemp: Int? = null
         var parsedLambdaV: Double? = null
         var parsedLambdaCorr: Double? = null
+        var parsedLambdaFactor: Double? = null
         var parsedThrottle: Double? = null
         var parsedBatteryV: Double? = null
         var parsedInjMs: Double? = null
@@ -1523,7 +1565,16 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                         parsedBatteryV = decoded.numeric
                     }
                 }
-                FieldKind.LAMBDA_PCT -> parsedLambdaCorr = decoded.numeric
+                FieldKind.LAMBDA_PCT -> {
+                    if (group != 5) {
+                        parsedLambdaCorr = decoded.numeric
+                    }
+                }
+                FieldKind.LAMBDA_FACTOR -> {
+                    if (group != 5) {
+                        parsedLambdaFactor = decoded.numeric
+                    }
+                }
                 FieldKind.ANGLE -> {
                     // В группе 3 поле 3 — угол открытия дроссельной заслонки (ДПДЗ G69)
                     if (group == 3 || parsedThrottle == null) {
@@ -1531,22 +1582,17 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     }
                 }
                 FieldKind.LOAD_PCT -> {
-                    // В группе 001 / 005 поле 3 у Mono-Motronic может передавать лямбда-коррекцию в %
-                    if ((group == 1 || group == 5) && itemNum == 3 && parsedLambdaCorr == null) {
-                        parsedLambdaCorr = decoded.numeric
-                    }
+                    // LOAD_PCT (формулы 0x02/0x17/0x21) — это нагрузка/скважность/адаптация, не подменяем им лямбду!
                 }
                 FieldKind.INJ_MS -> parsedInjMs = decoded.numeric
                 else -> {
-                    // Запасная интерпретация по стандартной позиции поля Группы 001 / 005,
+                    // Запасная интерпретация по стандартной позиции поля Группы 001,
                     // если ЭБУ прислал нестандартный код формулы
                     if (group == 1 && itemNum == 2 && parsedCoolantTemp == null && decoded.numeric in -40.0..140.0) {
                         parsedCoolantTemp = decoded.numeric.toInt()
-                    } else if ((group == 1 || group == 5) && itemNum == 3 && parsedLambdaV == null && parsedLambdaCorr == null) {
+                    } else if (group == 1 && itemNum == 3 && parsedLambdaV == null && parsedLambdaCorr == null && parsedLambdaFactor == null) {
                         if (decoded.numeric in 0.0..1.5) {
                             parsedLambdaV = decoded.numeric
-                        } else if (decoded.numeric in -50.0..150.0) {
-                            parsedLambdaCorr = decoded.numeric
                         }
                     }
                 }
@@ -1560,6 +1606,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             coolantTemp = parsedCoolantTemp,
             lambdaVoltage = parsedLambdaV,
             lambdaCorrection = parsedLambdaCorr,
+            lambdaFactor = parsedLambdaFactor,
             throttleAngle = parsedThrottle,
             batteryVoltage = parsedBatteryV,
             intakeAirTemp = parsedAirTemp,
@@ -1570,7 +1617,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
     }
 
     private enum class FieldKind {
-        RPM, TEMP, VOLTAGE, LAMBDA_PCT, ANGLE, LOAD_PCT, INJ_MS, SPEED, BITS, OTHER
+        RPM, TEMP, VOLTAGE, LAMBDA_PCT, LAMBDA_FACTOR, ANGLE, LOAD_PCT, INJ_MS, SPEED, BITS, OTHER
     }
 
     private data class DecodedFormula(
@@ -1624,7 +1671,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             }
             0x0B -> {
                 val v = 0.0001 * a * b + 0.5
-                DecodedFormula(v, "%.3f λ".format(v), FieldKind.LAMBDA_PCT)
+                DecodedFormula(v, "%.3f λ".format(v), FieldKind.LAMBDA_FACTOR)
             }
             0x0D -> {
                 val v = (b - 127) * 0.001 * a
@@ -3102,6 +3149,7 @@ class MainActivity : AppCompatActivity() {
             var lastTemp: Int? = null
             var lastLambdaV: Double? = null
             var lastLambdaCorr: Double? = null
+            var lastLambdaFactor: Double? = null
             var lastThrottle: Double? = null
             var lastAirTemp: Int? = null
             var lastBatteryV: Double? = null
@@ -3128,6 +3176,7 @@ class MainActivity : AppCompatActivity() {
                                 m1.coolantTemp?.let { lastTemp = it }
                                 m1.lambdaVoltage?.let { lastLambdaV = it }
                                 m1.lambdaCorrection?.let { lastLambdaCorr = it }
+                                m1.lambdaFactor?.let { lastLambdaFactor = it }
                                 g1Fields = m1.fields
                             } else {
                                 lastErr = m1.errorMessage
@@ -3149,7 +3198,7 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
 
-                        // Если ДТОЖ или Лямбда не получены из Группы 001 — добираем из Групп 004 и 005
+                        // Если ДТОЖ не получен из Группы 001 — добираем из Группы 004
                         if (!useGroupZeroOnly && g4Supported && (lastTemp == null || cycleCount == 0) && isActive && protocol.isSessionActive) {
                             delay(50)
                             val m4 = protocol.readMeasuringGroup(4) { }
@@ -3163,14 +3212,14 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
 
-                        if (!useGroupZeroOnly && g5Supported && (lastLambdaV == null || (lastLambdaCorr == null && cycleCount % 2 == 0)) && isActive && protocol.isSessionActive) {
+                        // Группа 005 на Mono-Motronic содержит адаптацию смеси (не подменяет лямбда-коррекцию из Гр. 001!)
+                        if (!useGroupZeroOnly && g5Supported && cycleCount % 4 == 0 && isActive && protocol.isSessionActive) {
                             delay(50)
                             val m5 = protocol.readMeasuringGroup(5) { }
                             if (m5 != null && !m5.isUnsupportedNak && m5.errorMessage == null) {
                                 gotValid = true
                                 m5.coolantTemp?.let { if (lastTemp == null) lastTemp = it }
-                                m5.lambdaVoltage?.let { lastLambdaV = it }
-                                m5.lambdaCorrection?.let { lastLambdaCorr = it }
+                                m5.lambdaVoltage?.let { if (lastLambdaV == null) lastLambdaV = it }
                                 g5Fields = m5.fields
                             } else if (m5?.isUnsupportedNak == true) {
                                 g5Supported = false
@@ -3190,8 +3239,8 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    // Фоллбек на Группу 000 (10 байт Mono-Motronic): если Группа 001 отклонена ИЛИ ДТОЖ/Лямбда не удалось прочитать из групп 001..005
-                    val needGroupZeroFallback = useGroupZeroOnly || lastTemp == null || (lastLambdaV == null && lastLambdaCorr == null)
+                    // Фоллбек на Группу 000 (10 байт Mono-Motronic): если Группа 001 отклонена ИЛИ ДТОЖ/Лямбда не удалось прочитать
+                    val needGroupZeroFallback = useGroupZeroOnly || lastTemp == null || (lastLambdaV == null && lastLambdaCorr == null && lastLambdaFactor == null)
                     if (needGroupZeroFallback && isActive && protocol.isSessionActive) {
                         delay(50)
                         val m0 = protocol.readMeasuringGroup(0) { }
@@ -3211,7 +3260,7 @@ class MainActivity : AppCompatActivity() {
 
                     if (gotValid) {
                         consecutiveErrors = 0
-                        updateGaugeViews(lastRpm, lastTemp, lastLambdaV, lastLambdaCorr, lastThrottle)
+                        updateGaugeViews(lastRpm, lastTemp, lastLambdaV, lastLambdaCorr, lastLambdaFactor, lastThrottle)
 
                         val sb = StringBuilder()
                         sb.append(if (useGroupZeroOnly) "ЖИВЫЕ ПАРАМЕТРЫ (ГРУППА 000):\\n" else "ЖИВЫЕ ПАРАМЕТРЫ ДАТЧИКОВ:\\n")
@@ -3220,6 +3269,7 @@ class MainActivity : AppCompatActivity() {
                         val lambdaText = when {
                             lastLambdaV != null -> "%.2f В".format(lastLambdaV)
                             lastLambdaCorr != null -> "%.1f %% (коррекция)".format(lastLambdaCorr)
+                            lastLambdaFactor != null -> "%.3f λ".format(lastLambdaFactor)
                             else -> "---"
                         }
                         sb.append("• Лямбда-зонд (G39): ").append(lambdaText).append("\\n")
@@ -3238,7 +3288,7 @@ class MainActivity : AppCompatActivity() {
                             sb.append("\\nГруппа 004: ").append(g4Fields.joinToString(" | ") { it.valueText })
                         }
                         if (g5Fields.isNotEmpty()) {
-                            sb.append("\\nГруппа 005: ").append(g5Fields.joinToString(" | ") { it.valueText })
+                            sb.append("\\nАдаптация (Гр.005): ").append(g5Fields.joinToString(" | ") { it.valueText })
                         }
                         if (g0Raw.isNotEmpty()) {
                             sb.append("\\nБайты 000: ").append(g0Raw.joinToString(" ") { "%03d".format(it) })
@@ -3280,6 +3330,7 @@ class MainActivity : AppCompatActivity() {
         temp: Int?,
         lambdaV: Double?,
         lambdaCorr: Double?,
+        lambdaFactor: Double?,
         throttle: Double?
     ) {
         runOnUiThread {
@@ -3291,6 +3342,9 @@ class MainActivity : AppCompatActivity() {
             } else if (lambdaCorr != null) {
                 tvGaugeLambda.text = "%.1f".format(lambdaCorr)
                 tvGaugeLambdaUnit.text = "% корр."
+            } else if (lambdaFactor != null) {
+                tvGaugeLambda.text = "%.3f".format(lambdaFactor)
+                tvGaugeLambdaUnit.text = "λ факт."
             }
             throttle?.let { tvGaugeThrottle.text = "%.1f".format(it) }
         }
@@ -3355,6 +3409,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val protocol = kwProtocol ?: return
+        val wasLiveRunning = liveStreamJob != null
         stopLiveStream()
         layoutActuatorTest.visibility = View.GONE
         layoutAdaptation.visibility = View.GONE
@@ -3366,10 +3421,11 @@ class MainActivity : AppCompatActivity() {
         basicSettingsJob = lifecycleScope.launch {
             var activeGroup = 0
             try {
+                if (wasLiveRunning) delay(80)
                 var initialResult = protocol.enterBasicSettings(0) { }
                 var fallbackMsg: String? = null
-                if (!initialResult.success && protocol.isSessionActive && (initialResult.isNak || initialResult.message.contains("Таймаут") || initialResult.message.contains("отклонил"))) {
-                    delay(60)
+                if (!initialResult.success && protocol.isSessionActive) {
+                    delay(80)
                     val fallbackGroup1 = protocol.enterBasicSettings(1) { }
                     if (fallbackGroup1.success) {
                         activeGroup = 1
@@ -3408,7 +3464,7 @@ class MainActivity : AppCompatActivity() {
 
                     val m = res.measurement
                     if (m != null) {
-                        updateGaugeViews(m.rpm, m.coolantTemp, m.lambdaVoltage, m.lambdaCorrection, m.throttleAngle)
+                        updateGaugeViews(m.rpm, m.coolantTemp, m.lambdaVoltage, m.lambdaCorrection, m.lambdaFactor, m.throttleAngle)
                     }
 
                     val extraLine = when {
@@ -3420,17 +3476,23 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     setResultText("🔧 РЕЖИМ БАЗОВЫХ УСТАНОВОК (Группа %03d) АКТИВЕН!\\n\\n".format(activeGroup) +
-                            "• ЭБУ зафиксировал базовый угол опережения зажигания.\\n" +
+                            "• ЭБУ зафиксировал базовый угол опережения зажигания (keep-alive 0x09 приостановлен).\\n" +
                             "• Для регулировки УОЗ 6° до ВМТ проверьте прогрев (>80°C) и работайте стробоскопом по метке маховика.\\n" +
                             "• $extraLine\\n\\n" +
                             "Нажмите «СТОП БАЗОВЫЕ» для выхода из режима.")
 
-                    delay(450)
+                    delay(250)
                 }
             } catch (t: Throwable) {
                 // Остановка по отмене
             } finally {
                 basicSettingsJob = null
+                protocol.isKeepAlivePaused = false
+                lifecycleScope.launch {
+                    try {
+                        protocol.finishBasicSettings()
+                    } catch (_: Throwable) {}
+                }
                 runOnUiThread {
                     btnBasicSettings.text = "БАЗОВЫЕ (УОЗ 6°)"
                     btnBasicSettings.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0D9488"))
@@ -3442,6 +3504,7 @@ class MainActivity : AppCompatActivity() {
     private fun stopBasicSettingsStream() {
         basicSettingsJob?.cancel()
         basicSettingsJob = null
+        kwProtocol?.isKeepAlivePaused = false
         runOnUiThread {
             btnBasicSettings.text = "БАЗОВЫЕ (УОЗ 6°)"
             btnBasicSettings.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0D9488"))
