@@ -510,7 +510,9 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                             idx += 3
 
                             val code = (hi shl 8) or lo
-                            if (code != 0) {
+                            // В KWP1281 тройка FF FF 88 (65535, статус 0x88) — штатный маркер «Ошибок нет»
+                            val isNoFaultSentinel = (code == 0) || (code == 0xFFFF && (status == 0x88 || status == 0xFF))
+                            if (!isNoFaultSentinel) {
                                 val dtc = "%05d".format(code)
                                 val known = ALL_KNOWN_DTCS[dtc]
                                 val item = known ?: DtcDetailedItem(
@@ -1232,14 +1234,9 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     }
                 }
                 else -> {
-                    // Запасная интерпретация по стандартной позиции поля Группы 001,
-                    // если ЭБУ прислал нестандартный код формулы
+                    // Запасная интерпретация температуры в Группе 001 (поле 2), если код формулы нестандартный
                     if (group == 1 && itemNum == 2 && parsedCoolantTemp == null && decoded.numeric in -40.0..140.0) {
                         parsedCoolantTemp = decoded.numeric.toInt()
-                    } else if (group == 1 && itemNum == 3 && parsedLambdaV == null && parsedLambdaCorr == null && parsedLambdaFactor == null) {
-                        if (decoded.numeric in 0.0..1.5) {
-                            parsedLambdaV = decoded.numeric
-                        }
                     }
                 }
             }
@@ -1324,12 +1321,12 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 DecodedFormula(b.toDouble(), txt, FieldKind.OTHER)
             }
             0x0B -> {
-                val v = 0.0001 * a * b + 0.5
+                val v = 0.0001 * a * (b - 128) + 1.0
                 DecodedFormula(v, "%.3f λ".format(v), FieldKind.LAMBDA_FACTOR)
             }
             0x0D -> {
                 val v = (b - 127) * 0.001 * a
-                DecodedFormula(v, "%.2f".format(v), FieldKind.OTHER)
+                DecodedFormula(v, "%.2f В".format(v), FieldKind.VOLTAGE)
             }
             0x0F -> {
                 val v = 0.01 * a * b

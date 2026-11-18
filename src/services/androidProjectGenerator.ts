@@ -944,7 +944,9 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                             idx += 3
 
                             val code = (hi shl 8) or lo
-                            if (code != 0) {
+                            // В KWP1281 тройка FF FF 88 (65535, статус 0x88) — штатный маркер «Ошибок нет»
+                            val isNoFaultSentinel = (code == 0) || (code == 0xFFFF && (status == 0x88 || status == 0xFF))
+                            if (!isNoFaultSentinel) {
                                 val dtc = "%05d".format(code)
                                 val known = ALL_KNOWN_DTCS[dtc]
                                 val item = known ?: DtcDetailedItem(
@@ -1666,14 +1668,9 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     }
                 }
                 else -> {
-                    // Запасная интерпретация по стандартной позиции поля Группы 001,
-                    // если ЭБУ прислал нестандартный код формулы
+                    // Запасная интерпретация температуры в Группе 001 (поле 2), если код формулы нестандартный
                     if (group == 1 && itemNum == 2 && parsedCoolantTemp == null && decoded.numeric in -40.0..140.0) {
                         parsedCoolantTemp = decoded.numeric.toInt()
-                    } else if (group == 1 && itemNum == 3 && parsedLambdaV == null && parsedLambdaCorr == null && parsedLambdaFactor == null) {
-                        if (decoded.numeric in 0.0..1.5) {
-                            parsedLambdaV = decoded.numeric
-                        }
                     }
                 }
             }
@@ -1758,12 +1755,12 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 DecodedFormula(b.toDouble(), txt, FieldKind.OTHER)
             }
             0x0B -> {
-                val v = 0.0001 * a * b + 0.5
+                val v = 0.0001 * a * (b - 128) + 1.0
                 DecodedFormula(v, "%.3f λ".format(v), FieldKind.LAMBDA_FACTOR)
             }
             0x0D -> {
                 val v = (b - 127) * 0.001 * a
-                DecodedFormula(v, "%.2f".format(v), FieldKind.OTHER)
+                DecodedFormula(v, "%.2f В".format(v), FieldKind.VOLTAGE)
             }
             0x0F -> {
                 val v = 0.01 * a * b
@@ -1957,8 +1954,6 @@ class OscilloscopeView @JvmOverloads constructor(
         AIR_TEMP("ДТВВ G42", "°C", Color.parseColor("#FB923C"), 20f),
         TIMING("УОЗ", "°", Color.parseColor("#FACC15"), 15f),
         LOAD("Нагрузка", "%", Color.parseColor("#60A5FA"), 25f),
-        SPEED("Скорость", "км/ч", Color.parseColor("#818CF8"), 40f),
-        ADAPTATION("Адапт.005", "%", Color.parseColor("#A3E635"), 10f),
         IDLE_SWITCH("Конц. F60", "", Color.parseColor("#34D399"), 1.2f, isDigital = true)
     }
 
@@ -2268,23 +2263,21 @@ class OscilloscopeView @JvmOverloads constructor(
         return when (ch) {
             SensorChannel.RPM -> "\${ch.label}: \${latest.toInt()} [\${obsMin.toInt()}..\${obsMax.toInt()}]"
             SensorChannel.COOLANT,
-            SensorChannel.AIR_TEMP,
-            SensorChannel.SPEED -> "\${ch.label}: \${latest.toInt()} \${ch.unit}"
+            SensorChannel.AIR_TEMP -> "\${ch.label}: \${latest.toInt()} \${ch.unit}"
             SensorChannel.IDLE_SWITCH -> {
                 val st = if (latest >= 0.5f) "ЗАМКН.(ХХ)" else "РАЗОМКН."
                 "\${ch.label}: $st"
             }
             SensorChannel.LAMBDA -> {
-                val u = lambdaUnitLabel
-                if (abs(obsMax - obsMin) <= 2.5f && abs(latest) <= 2.5f) {
-                    "\${ch.label}: %.2f $u [%.2f..%.2f]".format(latest, obsMin, obsMax)
-                } else {
-                    "\${ch.label}: %.1f%% [%.0f..%.0f]".format(latest, obsMin, obsMax)
+                when (lambdaUnitLabel) {
+                    "λ" -> "\${ch.label}: \${"%.3f".format(latest)} λ [\${"%.3f".format(obsMin)}..\${"%.3f".format(obsMax)}]"
+                    "В" -> "\${ch.label}: \${"%.2f".format(latest)} В [\${"%.2f".format(obsMin)}..\${"%.2f".format(obsMax)}]"
+                    else -> "\${ch.label}: \${"%.1f".format(latest)} % [\${"%.0f".format(obsMin)}..\${"%.0f".format(obsMax)}]"
                 }
             }
             SensorChannel.BATTERY,
-            SensorChannel.INJECTION -> "\${ch.label}: %.2f \${ch.unit} [%.2f..%.2f]".format(latest, obsMin, obsMax)
-            else -> "\${ch.label}: %.1f \${ch.unit} [%.1f..%.1f]".format(latest, obsMin, obsMax)
+            SensorChannel.INJECTION -> "\${ch.label}: \${"%.2f".format(latest)} \${ch.unit} [\${"%.2f".format(obsMin)}..\${"%.2f".format(obsMax)}]"
+            else -> "\${ch.label}: \${"%.1f".format(latest)} \${ch.unit} [\${"%.1f".format(obsMin)}..\${"%.1f".format(obsMax)}]"
         }
     }
 }
@@ -2583,26 +2576,16 @@ class OscilloscopeView @JvmOverloads constructor(
 
             <TextView
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Канал:"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:layout_marginEnd="6dp" />
-
-            <EditText
-                android:id="@+id/etAdaptChannel"
-                android:layout_width="64dp"
                 android:layout_height="44dp"
-                android:background="#0F172A"
-                android:text="00"
-                android:textColor="#38BDF8"
-                android:textSize="15sp"
-                android:textStyle="bold"
                 android:gravity="center"
-                android:inputType="number"
-                android:maxLength="3"
-                android:layout_marginEnd="12dp" />
+                android:background="#0F172A"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:text="Группа / Канал: 00"
+                android:textColor="#38BDF8"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="10dp" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -2638,34 +2621,21 @@ class OscilloscopeView @JvmOverloads constructor(
                 android:layout_width="0dp"
                 android:layout_height="48dp"
                 android:layout_weight="1"
-                android:layout_marginEnd="3dp"
+                android:layout_marginEnd="4dp"
                 android:text="ЧИТАТЬ"
-                android:textSize="12sp"
+                android:textSize="13sp"
                 android:textStyle="bold"
                 android:backgroundTint="#0284C7"
-                android:textColor="#FFFFFF" />
-
-            <Button
-                android:id="@+id/btnAdaptTest"
-                android:layout_width="0dp"
-                android:layout_height="48dp"
-                android:layout_weight="1"
-                android:layout_marginStart="3dp"
-                android:layout_marginEnd="3dp"
-                android:text="ТЕСТ"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:backgroundTint="#D97706"
                 android:textColor="#FFFFFF" />
 
             <Button
                 android:id="@+id/btnAdaptSave"
                 android:layout_width="0dp"
                 android:layout_height="48dp"
-                android:layout_weight="1.2"
-                android:layout_marginStart="3dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
                 android:text="СОХРАНИТЬ"
-                android:textSize="12sp"
+                android:textSize="13sp"
                 android:textStyle="bold"
                 android:backgroundTint="#10B981"
                 android:textColor="#FFFFFF" />
@@ -3502,12 +3472,12 @@ class OscilloscopeView @JvmOverloads constructor(
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- Row 5: Engine Load + Vehicle Speed -->
+            <!-- Row 5: Engine Load + F60 Idle Switch -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:layout_marginBottom="6dp">
+                android:layout_marginBottom="8dp">
 
                 <LinearLayout
                     android:id="@+id/cardLoad"
@@ -3566,126 +3536,6 @@ class OscilloscopeView @JvmOverloads constructor(
                 </LinearLayout>
 
                 <LinearLayout
-                    android:id="@+id/cardSpeed"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginStart="3dp"
-                    android:orientation="vertical"
-                    android:background="#1E293B"
-                    android:padding="10dp"
-                    android:clickable="true"
-                    android:focusable="true">
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical">
-
-                        <TextView
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="СКОРОСТЬ (G68)"
-                            android:textColor="#94A3B8"
-                            android:textSize="10sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:id="@+id/tvBadgeSpeed"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="+ график"
-                            android:textColor="#64748B"
-                            android:textSize="9sp"
-                            android:textStyle="bold" />
-                    </LinearLayout>
-
-                    <TextView
-                        android:id="@+id/tvMeasSpeed"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="---"
-                        android:textColor="#818CF8"
-                        android:textSize="20sp"
-                        android:textStyle="bold"
-                        android:typeface="monospace"
-                        android:layout_marginTop="2dp" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="км/ч"
-                        android:textColor="#64748B"
-                        android:textSize="10sp" />
-                </LinearLayout>
-            </LinearLayout>
-
-            <!-- Row 6: Adaptation + F60 Idle Switch -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:layout_marginBottom="8dp">
-
-                <LinearLayout
-                    android:id="@+id/cardAdapt"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginEnd="3dp"
-                    android:orientation="vertical"
-                    android:background="#1E293B"
-                    android:padding="10dp"
-                    android:clickable="true"
-                    android:focusable="true">
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical">
-
-                        <TextView
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="АДАПТАЦИЯ (Гр.005)"
-                            android:textColor="#94A3B8"
-                            android:textSize="10sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:id="@+id/tvBadgeAdapt"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="+ график"
-                            android:textColor="#64748B"
-                            android:textSize="9sp"
-                            android:textStyle="bold" />
-                    </LinearLayout>
-
-                    <TextView
-                        android:id="@+id/tvMeasAdapt"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="---"
-                        android:textColor="#A3E635"
-                        android:textSize="20sp"
-                        android:textStyle="bold"
-                        android:typeface="monospace"
-                        android:layout_marginTop="2dp" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="% коррекция смеси"
-                        android:textColor="#64748B"
-                        android:textSize="10sp" />
-                </LinearLayout>
-
-                <LinearLayout
                     android:id="@+id/cardIdleSwitch"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -3731,7 +3581,7 @@ class OscilloscopeView @JvmOverloads constructor(
                         android:textSize="16sp"
                         android:textStyle="bold"
                         android:typeface="monospace"
-                        android:layout_marginTop="4dp" />
+                        android:layout_marginTop="3dp" />
 
                     <TextView
                         android:id="@+id/tvMeasMode"
@@ -3844,8 +3694,6 @@ class MainActivity : AppCompatActivity() {
         val tvAirTemp: TextView = dialog.findViewById(R.id.tvMeasAirTemp)
         val tvTiming: TextView = dialog.findViewById(R.id.tvMeasTiming)
         val tvLoad: TextView = dialog.findViewById(R.id.tvMeasLoad)
-        val tvSpeed: TextView = dialog.findViewById(R.id.tvMeasSpeed)
-        val tvAdapt: TextView = dialog.findViewById(R.id.tvMeasAdapt)
         val tvIdleSwitch: TextView = dialog.findViewById(R.id.tvMeasIdleSwitch)
         val tvMode: TextView = dialog.findViewById(R.id.tvMeasMode)
         val tvRawGroups: TextView = dialog.findViewById(R.id.tvMeasRawGroups)
@@ -3860,8 +3708,6 @@ class MainActivity : AppCompatActivity() {
             SensorChannel.AIR_TEMP to (dialog.findViewById<LinearLayout>(R.id.cardAirTemp) to dialog.findViewById<TextView>(R.id.tvBadgeAirTemp)),
             SensorChannel.TIMING to (dialog.findViewById<LinearLayout>(R.id.cardTiming) to dialog.findViewById<TextView>(R.id.tvBadgeTiming)),
             SensorChannel.LOAD to (dialog.findViewById<LinearLayout>(R.id.cardLoad) to dialog.findViewById<TextView>(R.id.tvBadgeLoad)),
-            SensorChannel.SPEED to (dialog.findViewById<LinearLayout>(R.id.cardSpeed) to dialog.findViewById<TextView>(R.id.tvBadgeSpeed)),
-            SensorChannel.ADAPTATION to (dialog.findViewById<LinearLayout>(R.id.cardAdapt) to dialog.findViewById<TextView>(R.id.tvBadgeAdapt)),
             SensorChannel.IDLE_SWITCH to (dialog.findViewById<LinearLayout>(R.id.cardIdleSwitch) to dialog.findViewById<TextView>(R.id.tvBadgeIdleSwitch))
         )
     }
@@ -3879,13 +3725,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnActuatorNext: Button
     private lateinit var btnActuatorStop: Button
 
-    // Панель адаптации (0x21 / 0x22 / 0x2A)
+    // Панель адаптации (Канал 00: 0x21 / 0x2A)
     private lateinit var layoutAdaptation: LinearLayout
     private lateinit var tvAdaptHint: TextView
-    private lateinit var etAdaptChannel: EditText
     private lateinit var etAdaptValue: EditText
     private lateinit var btnAdaptRead: Button
-    private lateinit var btnAdaptTest: Button
     private lateinit var btnAdaptSave: Button
     private lateinit var btnAdaptClose: Button
 
@@ -3982,10 +3826,8 @@ class MainActivity : AppCompatActivity() {
 
             layoutAdaptation = findViewById(R.id.layoutAdaptation)
             tvAdaptHint = findViewById(R.id.tvAdaptHint)
-            etAdaptChannel = findViewById(R.id.etAdaptChannel)
             etAdaptValue = findViewById(R.id.etAdaptValue)
             btnAdaptRead = findViewById(R.id.btnAdaptRead)
-            btnAdaptTest = findViewById(R.id.btnAdaptTest)
             btnAdaptSave = findViewById(R.id.btnAdaptSave)
             btnAdaptClose = findViewById(R.id.btnAdaptClose)
 
@@ -4018,7 +3860,6 @@ class MainActivity : AppCompatActivity() {
             btnAdaptationOpen.setOnClickListener { toggleAdaptationPanel() }
             btnAdaptClose.setOnClickListener { layoutAdaptation.visibility = View.GONE }
             btnAdaptRead.setOnClickListener { performAdaptationRead() }
-            btnAdaptTest.setOnClickListener { performAdaptationTest() }
             btnAdaptSave.setOnClickListener { performAdaptationSave() }
             btnEcuPassport.setOnClickListener { showEcuPassport() }
             btnShareReport.setOnClickListener { copyDiagnosticReport() }
@@ -4096,7 +3937,7 @@ class MainActivity : AppCompatActivity() {
             btnActuatorStart.visibility = View.GONE
             btnBasicSettings.visibility = View.GONE
             btnAdaptationOpen.visibility = View.VISIBLE
-            tvAdaptHint.text = "Канал 00: привязка ЭБУ к иммобилайзеру (Сохранить 0) • Канал 01: кол-во ключей"
+            tvAdaptHint.text = "Канал 00: привязка ЭБУ двигателя к иммобилайзеру (введите 0 и Сохранить)"
         }
     }
 
@@ -4475,7 +4316,7 @@ class MainActivity : AppCompatActivity() {
 
         btnMeasuring.text = "ОКНО ОТКРЫТО"
         btnMeasuring.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#DC2626"))
-        setResultText("Открыто окно измерений и осциллограммы (Группы 001, 003, 004 + 002/005)...")
+        setResultText("Открыто окно измерений и осциллограммы (Группы 001–004)...")
 
         // Пауза фонового keep-alive 0x09 ускоряет опрос и исключает конкуренцию за busMutex
         protocol.isKeepAlivePaused = true
@@ -4484,7 +4325,6 @@ class MainActivity : AppCompatActivity() {
             var useGroupZeroOnly = false
             var g3Supported = true
             var g4Supported = true
-            var g5Supported = true
             var g2Supported = true
             var consecutiveErrors = 0
             var cycleCount = 0
@@ -4502,8 +4342,6 @@ class MainActivity : AppCompatActivity() {
             var lastTiming: String? = null
             var lastTimingDeg: Double? = null
             var lastLoadPct: Double? = null
-            var lastSpeedKmh: Int? = null
-            var lastAdaptPct: Double? = null
             var lastIdleSwitchClosed: Boolean? = null
             var lastModeText: String? = null
             var lastStatusBits: String? = null
@@ -4516,7 +4354,6 @@ class MainActivity : AppCompatActivity() {
                     var g2Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g3Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g4Fields = emptyList<Kw1281Protocol.MeasuredField>()
-                    var g5Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g0Raw = emptyList<Int>()
                     var gotG4SwitchThisCycle = false
 
@@ -4529,9 +4366,23 @@ class MainActivity : AppCompatActivity() {
                                 gotValid = true
                                 m1.rpm?.let { lastRpm = it }
                                 m1.coolantTemp?.let { lastTemp = it }
-                                m1.lambdaVoltage?.let { lastLambdaV = it }
-                                m1.lambdaCorrection?.let { lastLambdaCorr = it }
-                                m1.lambdaFactor?.let { lastLambdaFactor = it }
+                                when {
+                                    m1.lambdaFactor != null -> {
+                                        lastLambdaFactor = m1.lambdaFactor
+                                        lastLambdaV = null
+                                        lastLambdaCorr = null
+                                    }
+                                    m1.lambdaCorrection != null -> {
+                                        lastLambdaCorr = m1.lambdaCorrection
+                                        lastLambdaV = null
+                                        lastLambdaFactor = null
+                                    }
+                                    m1.lambdaVoltage != null -> {
+                                        lastLambdaV = m1.lambdaVoltage
+                                        lastLambdaCorr = null
+                                        lastLambdaFactor = null
+                                    }
+                                }
                                 if (m1.idleSwitchClosed != null && (!g4Supported || lastIdleSwitchClosed == null)) {
                                     lastIdleSwitchClosed = m1.idleSwitchClosed
                                 }
@@ -4570,7 +4421,6 @@ class MainActivity : AppCompatActivity() {
                                 m4.coolantTemp?.let { if (lastTemp == null) lastTemp = it }
                                 m4.intakeAirTemp?.let { if (lastAirTemp == null) lastAirTemp = it }
                                 m4.engineLoadPct?.let { if (lastLoadPct == null) lastLoadPct = it }
-                                m4.vehicleSpeedKmh?.let { lastSpeedKmh = it }
                                 m4.idleSwitchClosed?.let {
                                     lastIdleSwitchClosed = it
                                     gotG4SwitchThisCycle = true
@@ -4583,9 +4433,8 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
 
-                        // Чередуем вторичные группы (не более 1 доп. группы за цикл) для максимальной частоты опроса
+                        // Опрос вторичной Группы 002 (АКБ, время впрыска, ДТВВ) раз в 3 цикла для высокой частоты
                         val pollG2Now = g2Supported && (cycleCount % 3 == 0 || lastBatteryV == null || lastInjMs == null)
-                        val pollG5Now = !pollG2Now && g5Supported && (cycleCount % 6 == 3 || lastAdaptPct == null)
 
                         if (!useGroupZeroOnly && pollG2Now && isActive && protocol.isSessionActive) {
                             delay(10)
@@ -4599,21 +4448,6 @@ class MainActivity : AppCompatActivity() {
                             } else if (m2?.isUnsupportedNak == true) {
                                 g2Supported = false
                             }
-                        } else if (!useGroupZeroOnly && pollG5Now && isActive && protocol.isSessionActive) {
-                            delay(10)
-                            val m5 = protocol.readMeasuringGroup(5) { }
-                            if (m5 != null && !m5.isUnsupportedNak && m5.errorMessage == null) {
-                                gotValid = true
-                                m5.coolantTemp?.let { if (lastTemp == null) lastTemp = it }
-                                m5.mixtureAdaptationPct?.let { lastAdaptPct = it }
-                                if (!gotG4SwitchThisCycle) {
-                                    m5.idleSwitchClosed?.let { if (lastIdleSwitchClosed == null) lastIdleSwitchClosed = it }
-                                    m5.operatingModeText?.let { if (lastModeText == null) lastModeText = it }
-                                }
-                                g5Fields = m5.fields
-                            } else if (m5?.isUnsupportedNak == true) {
-                                g5Supported = false
-                            }
                         }
                     }
 
@@ -4626,12 +4460,12 @@ class MainActivity : AppCompatActivity() {
                             gotValid = true
                             m0.rpm?.let { if (lastRpm == null || useGroupZeroOnly) lastRpm = it }
                             m0.coolantTemp?.let { lastTemp = it }
-                            m0.lambdaVoltage?.let { if (lastLambdaV == null) lastLambdaV = it }
-                            m0.lambdaCorrection?.let { if (lastLambdaCorr == null || useGroupZeroOnly) lastLambdaCorr = it }
+                            val hasG1Lambda = lastLambdaV != null || lastLambdaCorr != null || lastLambdaFactor != null
+                            m0.lambdaVoltage?.let { if (!hasG1Lambda || useGroupZeroOnly) lastLambdaV = it }
+                            m0.lambdaCorrection?.let { if (!hasG1Lambda || useGroupZeroOnly) lastLambdaCorr = it }
                             m0.throttleAngle?.let { if (lastThrottle == null || useGroupZeroOnly) lastThrottle = it }
                             m0.batteryVoltage?.let { if (lastBatteryV == null || useGroupZeroOnly) lastBatteryV = it }
                             m0.intakeAirTemp?.let { if (lastAirTemp == null || useGroupZeroOnly) lastAirTemp = it }
-                            m0.mixtureAdaptationPct?.let { if (lastAdaptPct == null || useGroupZeroOnly) lastAdaptPct = it }
                             m0.idleSwitchClosed?.let { if (!gotG4SwitchThisCycle && (lastIdleSwitchClosed == null || useGroupZeroOnly)) lastIdleSwitchClosed = it }
                             m0.operatingModeText?.let { if (lastModeText == null || useGroupZeroOnly) lastModeText = it }
                             g0Raw = m0.rawValues
@@ -4667,8 +4501,6 @@ class MainActivity : AppCompatActivity() {
                         lastAirTemp?.let { sampleMap[SensorChannel.AIR_TEMP] = it.toFloat() }
                         lastTimingDeg?.let { sampleMap[SensorChannel.TIMING] = it.toFloat() }
                         lastLoadPct?.let { sampleMap[SensorChannel.LOAD] = it.toFloat() }
-                        lastSpeedKmh?.let { sampleMap[SensorChannel.SPEED] = it.toFloat() }
-                        lastAdaptPct?.let { sampleMap[SensorChannel.ADAPTATION] = it.toFloat() }
                         lastIdleSwitchClosed?.let { sampleMap[SensorChannel.IDLE_SWITCH] = if (it) 1f else 0f }
 
                         val rawSummary = buildString {
@@ -4677,7 +4509,6 @@ class MainActivity : AppCompatActivity() {
                             if (g2Fields.isNotEmpty()) append("Гр.002: \${g2Fields.joinToString(" | ") { it.valueText }}\\n")
                             if (g3Fields.isNotEmpty()) append("Гр.003: \${g3Fields.joinToString(" | ") { it.valueText }}\\n")
                             if (g4Fields.isNotEmpty()) append("Гр.004: \${g4Fields.joinToString(" | ") { it.valueText }}\\n")
-                            if (g5Fields.isNotEmpty()) append("Гр.005: \${g5Fields.joinToString(" | ") { it.valueText }}\\n")
                             if (g0Raw.isNotEmpty()) append("Байты 000: \${g0Raw.joinToString(" ") { "%03d".format(it) }}")
                         }.trim()
 
@@ -4705,8 +4536,6 @@ class MainActivity : AppCompatActivity() {
                             lastAirTemp?.let { views.tvAirTemp.text = "$it" }
                             lastTiming?.let { views.tvTiming.text = it }
                             lastLoadPct?.let { views.tvLoad.text = "%.0f%%".format(it) }
-                            lastSpeedKmh?.let { views.tvSpeed.text = "$it" }
-                            lastAdaptPct?.let { views.tvAdapt.text = "%.1f%%".format(it) }
 
                             if (lastIdleSwitchClosed != null || lastModeText != null || lastStatusBits != null) {
                                 when (lastIdleSwitchClosed) {
@@ -4986,42 +4815,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Блок Адаптации (0x21 / 0x22 / 0x2A)
+    // Блок Адаптации (только Канал 00: 0x21 / 0x2A)
     private fun toggleAdaptationPanel() {
         stopAllBackgroundLoops()
         layoutActuatorTest.visibility = View.GONE
         layoutAdaptation.visibility = if (layoutAdaptation.visibility == View.VISIBLE) View.GONE else View.VISIBLE
     }
 
-    private fun parseAdaptInputs(needValue: Boolean): Pair<Int, Int>? {
-        val ch = etAdaptChannel.text.toString().trim().toIntOrNull()
-        if (ch == null || ch !in 0..255) {
-            setResultText("Ошибка ввода: номер канала должен быть числом от 0 до 255.")
+    private fun parseAdaptValue(): Int? {
+        val v = etAdaptValue.text.toString().trim().toIntOrNull()
+        if (v == null || v !in 0..65535) {
+            setResultText("Ошибка ввода: значение адаптации должно быть от 0 до 65535.")
             return null
         }
-        val valNum = if (needValue) {
-            val v = etAdaptValue.text.toString().trim().toIntOrNull()
-            if (v == null || v !in 0..65535) {
-                setResultText("Ошибка ввода: значение адаптации должно быть от 0 до 65535.")
-                return null
-            }
-            v
-        } else {
-            0
-        }
-        return ch to valNum
+        return v
     }
 
     private fun setAdaptationButtonsEnabled(enabled: Boolean) {
         btnAdaptRead.isEnabled = enabled
-        btnAdaptTest.isEnabled = enabled
         btnAdaptSave.isEnabled = enabled
     }
 
     private fun performAdaptationRead() {
         val protocol = kwProtocol ?: return
-        val inputs = parseAdaptInputs(needValue = false) ?: return
-        val channel = inputs.first
+        val channel = 0
 
         lifecycleScope.launch {
             stopAllBackgroundLoops()
@@ -5032,37 +4849,18 @@ class MainActivity : AppCompatActivity() {
             if (res.success) {
                 etAdaptValue.setText(res.value.toString())
                 setResultText("✅ \${res.message}\\n\\n" +
-                        "Текущее сохранённое значение канала %02d загружено в поле «Значение».".format(res.channel))
+                        "Текущее сохранённое значение канала 00 загружено в поле «Значение».")
             } else {
-                val tip = if (channel == 0) {
-                    "\\n\\nℹ️ Подсказка: На многих блоках Mono-Motronic и Иммо канал 00 не поддерживает чтение — для сброса адаптаций / привязки ЭБУ введите значение 0 и сразу нажмите «СОХРАНИТЬ»."
-                } else ""
-                setResultText("⚠️ \${res.message}$tip")
-            }
-        }
-    }
-
-    private fun performAdaptationTest() {
-        val protocol = kwProtocol ?: return
-        val (channel, value) = parseAdaptInputs(needValue = true) ?: return
-
-        lifecycleScope.launch {
-            stopAllBackgroundLoops()
-            setAdaptationButtonsEnabled(false)
-            val res = protocol.testAdaptation(channel, value)
-            setAdaptationButtonsEnabled(true)
-
-            if (res.success) {
-                setResultText("🔍 \${res.message}\\n\\nЗначение $value принято блоком для проверки. Нажмите «СОХРАНИТЬ» для записи в EEPROM.")
-            } else {
-                setResultText("⚠️ \${res.message}")
+                setResultText("⚠️ \${res.message}\\n\\n" +
+                        "ℹ️ Подсказка: На многих блоках Mono-Motronic и Иммо канал 00 не поддерживает чтение — для сброса адаптаций / привязки ЭБУ введите значение 0 и сразу нажмите «СОХРАНИТЬ».")
             }
         }
     }
 
     private fun performAdaptationSave() {
         val protocol = kwProtocol ?: return
-        val (channel, value) = parseAdaptInputs(needValue = true) ?: return
+        val channel = 0
+        val value = parseAdaptValue() ?: return
 
         lifecycleScope.launch {
             stopAllBackgroundLoops()
@@ -5071,11 +4869,11 @@ class MainActivity : AppCompatActivity() {
             setAdaptationButtonsEnabled(true)
 
             if (res.success) {
-                val extra = if (selectedEcuAddress == 0x25 && channel == 0) {
+                val extra = if (selectedEcuAddress == 0x25) {
                     "\\n\\n🔑 ВАЖНО ДЛЯ ИММОБИЛАЙЗЕРА:\\nВыключите зажигание минимум на 30 секунд для завершения привязки ЭБУ к иммобилайзеру."
-                } else if (selectedEcuAddress == 0x01 && channel == 0) {
+                } else {
                     "\\n\\n🔄 Сброс выученных адаптаций Mono-Motronic выполнен! После выключения зажигания на 15 сек блок заново обучит холостой ход."
-                } else ""
+                }
                 setResultText("✅ \${res.message}$extra")
             } else {
                 setResultText("⚠️ \${res.message}")

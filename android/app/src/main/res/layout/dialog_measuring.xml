@@ -652,12 +652,12 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- Row 5: Engine Load + Vehicle Speed -->
+            <!-- Row 5: Engine Load + F60 Idle Switch -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:layout_marginBottom="6dp">
+                android:layout_marginBottom="8dp">
 
                 <LinearLayout
                     android:id="@+id/cardLoad"
@@ -716,126 +716,6 @@
                 </LinearLayout>
 
                 <LinearLayout
-                    android:id="@+id/cardSpeed"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginStart="3dp"
-                    android:orientation="vertical"
-                    android:background="#1E293B"
-                    android:padding="10dp"
-                    android:clickable="true"
-                    android:focusable="true">
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical">
-
-                        <TextView
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="СКОРОСТЬ (G68)"
-                            android:textColor="#94A3B8"
-                            android:textSize="10sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:id="@+id/tvBadgeSpeed"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="+ график"
-                            android:textColor="#64748B"
-                            android:textSize="9sp"
-                            android:textStyle="bold" />
-                    </LinearLayout>
-
-                    <TextView
-                        android:id="@+id/tvMeasSpeed"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="---"
-                        android:textColor="#818CF8"
-                        android:textSize="20sp"
-                        android:textStyle="bold"
-                        android:typeface="monospace"
-                        android:layout_marginTop="2dp" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="км/ч"
-                        android:textColor="#64748B"
-                        android:textSize="10sp" />
-                </LinearLayout>
-            </LinearLayout>
-
-            <!-- Row 6: Adaptation + F60 Idle Switch -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:layout_marginBottom="8dp">
-
-                <LinearLayout
-                    android:id="@+id/cardAdapt"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginEnd="3dp"
-                    android:orientation="vertical"
-                    android:background="#1E293B"
-                    android:padding="10dp"
-                    android:clickable="true"
-                    android:focusable="true">
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical">
-
-                        <TextView
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="АДАПТАЦИЯ (Гр.005)"
-                            android:textColor="#94A3B8"
-                            android:textSize="10sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:id="@+id/tvBadgeAdapt"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="+ график"
-                            android:textColor="#64748B"
-                            android:textSize="9sp"
-                            android:textStyle="bold" />
-                    </LinearLayout>
-
-                    <TextView
-                        android:id="@+id/tvMeasAdapt"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="---"
-                        android:textColor="#A3E635"
-                        android:textSize="20sp"
-                        android:textStyle="bold"
-                        android:typeface="monospace"
-                        android:layout_marginTop="2dp" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="% коррекция смеси"
-                        android:textColor="#64748B"
-                        android:textSize="10sp" />
-                </LinearLayout>
-
-                <LinearLayout
                     android:id="@+id/cardIdleSwitch"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -881,7 +761,7 @@
                         android:textSize="16sp"
                         android:textStyle="bold"
                         android:typeface="monospace"
-                        android:layout_marginTop="4dp" />
+                        android:layout_marginTop="3dp" />
 
                     <TextView
                         android:id="@+id/tvMeasMode"

@@ -75,8 +75,6 @@ class MainActivity : AppCompatActivity() {
         val tvAirTemp: TextView = dialog.findViewById(R.id.tvMeasAirTemp)
         val tvTiming: TextView = dialog.findViewById(R.id.tvMeasTiming)
         val tvLoad: TextView = dialog.findViewById(R.id.tvMeasLoad)
-        val tvSpeed: TextView = dialog.findViewById(R.id.tvMeasSpeed)
-        val tvAdapt: TextView = dialog.findViewById(R.id.tvMeasAdapt)
         val tvIdleSwitch: TextView = dialog.findViewById(R.id.tvMeasIdleSwitch)
         val tvMode: TextView = dialog.findViewById(R.id.tvMeasMode)
         val tvRawGroups: TextView = dialog.findViewById(R.id.tvMeasRawGroups)
@@ -91,8 +89,6 @@ class MainActivity : AppCompatActivity() {
             SensorChannel.AIR_TEMP to (dialog.findViewById<LinearLayout>(R.id.cardAirTemp) to dialog.findViewById<TextView>(R.id.tvBadgeAirTemp)),
             SensorChannel.TIMING to (dialog.findViewById<LinearLayout>(R.id.cardTiming) to dialog.findViewById<TextView>(R.id.tvBadgeTiming)),
             SensorChannel.LOAD to (dialog.findViewById<LinearLayout>(R.id.cardLoad) to dialog.findViewById<TextView>(R.id.tvBadgeLoad)),
-            SensorChannel.SPEED to (dialog.findViewById<LinearLayout>(R.id.cardSpeed) to dialog.findViewById<TextView>(R.id.tvBadgeSpeed)),
-            SensorChannel.ADAPTATION to (dialog.findViewById<LinearLayout>(R.id.cardAdapt) to dialog.findViewById<TextView>(R.id.tvBadgeAdapt)),
             SensorChannel.IDLE_SWITCH to (dialog.findViewById<LinearLayout>(R.id.cardIdleSwitch) to dialog.findViewById<TextView>(R.id.tvBadgeIdleSwitch))
         )
     }
@@ -110,13 +106,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnActuatorNext: Button
     private lateinit var btnActuatorStop: Button
 
-    // Панель адаптации (0x21 / 0x22 / 0x2A)
+    // Панель адаптации (Канал 00: 0x21 / 0x2A)
     private lateinit var layoutAdaptation: LinearLayout
     private lateinit var tvAdaptHint: TextView
-    private lateinit var etAdaptChannel: EditText
     private lateinit var etAdaptValue: EditText
     private lateinit var btnAdaptRead: Button
-    private lateinit var btnAdaptTest: Button
     private lateinit var btnAdaptSave: Button
     private lateinit var btnAdaptClose: Button
 
@@ -213,10 +207,8 @@ class MainActivity : AppCompatActivity() {
 
             layoutAdaptation = findViewById(R.id.layoutAdaptation)
             tvAdaptHint = findViewById(R.id.tvAdaptHint)
-            etAdaptChannel = findViewById(R.id.etAdaptChannel)
             etAdaptValue = findViewById(R.id.etAdaptValue)
             btnAdaptRead = findViewById(R.id.btnAdaptRead)
-            btnAdaptTest = findViewById(R.id.btnAdaptTest)
             btnAdaptSave = findViewById(R.id.btnAdaptSave)
             btnAdaptClose = findViewById(R.id.btnAdaptClose)
 
@@ -249,7 +241,6 @@ class MainActivity : AppCompatActivity() {
             btnAdaptationOpen.setOnClickListener { toggleAdaptationPanel() }
             btnAdaptClose.setOnClickListener { layoutAdaptation.visibility = View.GONE }
             btnAdaptRead.setOnClickListener { performAdaptationRead() }
-            btnAdaptTest.setOnClickListener { performAdaptationTest() }
             btnAdaptSave.setOnClickListener { performAdaptationSave() }
             btnEcuPassport.setOnClickListener { showEcuPassport() }
             btnShareReport.setOnClickListener { copyDiagnosticReport() }
@@ -327,7 +318,7 @@ class MainActivity : AppCompatActivity() {
             btnActuatorStart.visibility = View.GONE
             btnBasicSettings.visibility = View.GONE
             btnAdaptationOpen.visibility = View.VISIBLE
-            tvAdaptHint.text = "Канал 00: привязка ЭБУ к иммобилайзеру (Сохранить 0) • Канал 01: кол-во ключей"
+            tvAdaptHint.text = "Канал 00: привязка ЭБУ двигателя к иммобилайзеру (введите 0 и Сохранить)"
         }
     }
 
@@ -706,7 +697,7 @@ class MainActivity : AppCompatActivity() {
 
         btnMeasuring.text = "ОКНО ОТКРЫТО"
         btnMeasuring.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#DC2626"))
-        setResultText("Открыто окно измерений и осциллограммы (Группы 001, 003, 004 + 002/005)...")
+        setResultText("Открыто окно измерений и осциллограммы (Группы 001–004)...")
 
         // Пауза фонового keep-alive 0x09 ускоряет опрос и исключает конкуренцию за busMutex
         protocol.isKeepAlivePaused = true
@@ -715,7 +706,6 @@ class MainActivity : AppCompatActivity() {
             var useGroupZeroOnly = false
             var g3Supported = true
             var g4Supported = true
-            var g5Supported = true
             var g2Supported = true
             var consecutiveErrors = 0
             var cycleCount = 0
@@ -733,8 +723,6 @@ class MainActivity : AppCompatActivity() {
             var lastTiming: String? = null
             var lastTimingDeg: Double? = null
             var lastLoadPct: Double? = null
-            var lastSpeedKmh: Int? = null
-            var lastAdaptPct: Double? = null
             var lastIdleSwitchClosed: Boolean? = null
             var lastModeText: String? = null
             var lastStatusBits: String? = null
@@ -747,7 +735,6 @@ class MainActivity : AppCompatActivity() {
                     var g2Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g3Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g4Fields = emptyList<Kw1281Protocol.MeasuredField>()
-                    var g5Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g0Raw = emptyList<Int>()
                     var gotG4SwitchThisCycle = false
 
@@ -760,9 +747,23 @@ class MainActivity : AppCompatActivity() {
                                 gotValid = true
                                 m1.rpm?.let { lastRpm = it }
                                 m1.coolantTemp?.let { lastTemp = it }
-                                m1.lambdaVoltage?.let { lastLambdaV = it }
-                                m1.lambdaCorrection?.let { lastLambdaCorr = it }
-                                m1.lambdaFactor?.let { lastLambdaFactor = it }
+                                when {
+                                    m1.lambdaFactor != null -> {
+                                        lastLambdaFactor = m1.lambdaFactor
+                                        lastLambdaV = null
+                                        lastLambdaCorr = null
+                                    }
+                                    m1.lambdaCorrection != null -> {
+                                        lastLambdaCorr = m1.lambdaCorrection
+                                        lastLambdaV = null
+                                        lastLambdaFactor = null
+                                    }
+                                    m1.lambdaVoltage != null -> {
+                                        lastLambdaV = m1.lambdaVoltage
+                                        lastLambdaCorr = null
+                                        lastLambdaFactor = null
+                                    }
+                                }
                                 if (m1.idleSwitchClosed != null && (!g4Supported || lastIdleSwitchClosed == null)) {
                                     lastIdleSwitchClosed = m1.idleSwitchClosed
                                 }
@@ -801,7 +802,6 @@ class MainActivity : AppCompatActivity() {
                                 m4.coolantTemp?.let { if (lastTemp == null) lastTemp = it }
                                 m4.intakeAirTemp?.let { if (lastAirTemp == null) lastAirTemp = it }
                                 m4.engineLoadPct?.let { if (lastLoadPct == null) lastLoadPct = it }
-                                m4.vehicleSpeedKmh?.let { lastSpeedKmh = it }
                                 m4.idleSwitchClosed?.let {
                                     lastIdleSwitchClosed = it
                                     gotG4SwitchThisCycle = true
@@ -814,9 +814,8 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
 
-                        // Чередуем вторичные группы (не более 1 доп. группы за цикл) для максимальной частоты опроса
+                        // Опрос вторичной Группы 002 (АКБ, время впрыска, ДТВВ) раз в 3 цикла для высокой частоты
                         val pollG2Now = g2Supported && (cycleCount % 3 == 0 || lastBatteryV == null || lastInjMs == null)
-                        val pollG5Now = !pollG2Now && g5Supported && (cycleCount % 6 == 3 || lastAdaptPct == null)
 
                         if (!useGroupZeroOnly && pollG2Now && isActive && protocol.isSessionActive) {
                             delay(10)
@@ -830,21 +829,6 @@ class MainActivity : AppCompatActivity() {
                             } else if (m2?.isUnsupportedNak == true) {
                                 g2Supported = false
                             }
-                        } else if (!useGroupZeroOnly && pollG5Now && isActive && protocol.isSessionActive) {
-                            delay(10)
-                            val m5 = protocol.readMeasuringGroup(5) { }
-                            if (m5 != null && !m5.isUnsupportedNak && m5.errorMessage == null) {
-                                gotValid = true
-                                m5.coolantTemp?.let { if (lastTemp == null) lastTemp = it }
-                                m5.mixtureAdaptationPct?.let { lastAdaptPct = it }
-                                if (!gotG4SwitchThisCycle) {
-                                    m5.idleSwitchClosed?.let { if (lastIdleSwitchClosed == null) lastIdleSwitchClosed = it }
-                                    m5.operatingModeText?.let { if (lastModeText == null) lastModeText = it }
-                                }
-                                g5Fields = m5.fields
-                            } else if (m5?.isUnsupportedNak == true) {
-                                g5Supported = false
-                            }
                         }
                     }
 
@@ -857,12 +841,12 @@ class MainActivity : AppCompatActivity() {
                             gotValid = true
                             m0.rpm?.let { if (lastRpm == null || useGroupZeroOnly) lastRpm = it }
                             m0.coolantTemp?.let { lastTemp = it }
-                            m0.lambdaVoltage?.let { if (lastLambdaV == null) lastLambdaV = it }
-                            m0.lambdaCorrection?.let { if (lastLambdaCorr == null || useGroupZeroOnly) lastLambdaCorr = it }
+                            val hasG1Lambda = lastLambdaV != null || lastLambdaCorr != null || lastLambdaFactor != null
+                            m0.lambdaVoltage?.let { if (!hasG1Lambda || useGroupZeroOnly) lastLambdaV = it }
+                            m0.lambdaCorrection?.let { if (!hasG1Lambda || useGroupZeroOnly) lastLambdaCorr = it }
                             m0.throttleAngle?.let { if (lastThrottle == null || useGroupZeroOnly) lastThrottle = it }
                             m0.batteryVoltage?.let { if (lastBatteryV == null || useGroupZeroOnly) lastBatteryV = it }
                             m0.intakeAirTemp?.let { if (lastAirTemp == null || useGroupZeroOnly) lastAirTemp = it }
-                            m0.mixtureAdaptationPct?.let { if (lastAdaptPct == null || useGroupZeroOnly) lastAdaptPct = it }
                             m0.idleSwitchClosed?.let { if (!gotG4SwitchThisCycle && (lastIdleSwitchClosed == null || useGroupZeroOnly)) lastIdleSwitchClosed = it }
                             m0.operatingModeText?.let { if (lastModeText == null || useGroupZeroOnly) lastModeText = it }
                             g0Raw = m0.rawValues
@@ -898,8 +882,6 @@ class MainActivity : AppCompatActivity() {
                         lastAirTemp?.let { sampleMap[SensorChannel.AIR_TEMP] = it.toFloat() }
                         lastTimingDeg?.let { sampleMap[SensorChannel.TIMING] = it.toFloat() }
                         lastLoadPct?.let { sampleMap[SensorChannel.LOAD] = it.toFloat() }
-                        lastSpeedKmh?.let { sampleMap[SensorChannel.SPEED] = it.toFloat() }
-                        lastAdaptPct?.let { sampleMap[SensorChannel.ADAPTATION] = it.toFloat() }
                         lastIdleSwitchClosed?.let { sampleMap[SensorChannel.IDLE_SWITCH] = if (it) 1f else 0f }
 
                         val rawSummary = buildString {
@@ -908,7 +890,6 @@ class MainActivity : AppCompatActivity() {
                             if (g2Fields.isNotEmpty()) append("Гр.002: ${g2Fields.joinToString(" | ") { it.valueText }}\n")
                             if (g3Fields.isNotEmpty()) append("Гр.003: ${g3Fields.joinToString(" | ") { it.valueText }}\n")
                             if (g4Fields.isNotEmpty()) append("Гр.004: ${g4Fields.joinToString(" | ") { it.valueText }}\n")
-                            if (g5Fields.isNotEmpty()) append("Гр.005: ${g5Fields.joinToString(" | ") { it.valueText }}\n")
                             if (g0Raw.isNotEmpty()) append("Байты 000: ${g0Raw.joinToString(" ") { "%03d".format(it) }}")
                         }.trim()
 
@@ -936,8 +917,6 @@ class MainActivity : AppCompatActivity() {
                             lastAirTemp?.let { views.tvAirTemp.text = "$it" }
                             lastTiming?.let { views.tvTiming.text = it }
                             lastLoadPct?.let { views.tvLoad.text = "%.0f%%".format(it) }
-                            lastSpeedKmh?.let { views.tvSpeed.text = "$it" }
-                            lastAdaptPct?.let { views.tvAdapt.text = "%.1f%%".format(it) }
 
                             if (lastIdleSwitchClosed != null || lastModeText != null || lastStatusBits != null) {
                                 when (lastIdleSwitchClosed) {
@@ -1217,42 +1196,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Блок Адаптации (0x21 / 0x22 / 0x2A)
+    // Блок Адаптации (только Канал 00: 0x21 / 0x2A)
     private fun toggleAdaptationPanel() {
         stopAllBackgroundLoops()
         layoutActuatorTest.visibility = View.GONE
         layoutAdaptation.visibility = if (layoutAdaptation.visibility == View.VISIBLE) View.GONE else View.VISIBLE
     }
 
-    private fun parseAdaptInputs(needValue: Boolean): Pair<Int, Int>? {
-        val ch = etAdaptChannel.text.toString().trim().toIntOrNull()
-        if (ch == null || ch !in 0..255) {
-            setResultText("Ошибка ввода: номер канала должен быть числом от 0 до 255.")
+    private fun parseAdaptValue(): Int? {
+        val v = etAdaptValue.text.toString().trim().toIntOrNull()
+        if (v == null || v !in 0..65535) {
+            setResultText("Ошибка ввода: значение адаптации должно быть от 0 до 65535.")
             return null
         }
-        val valNum = if (needValue) {
-            val v = etAdaptValue.text.toString().trim().toIntOrNull()
-            if (v == null || v !in 0..65535) {
-                setResultText("Ошибка ввода: значение адаптации должно быть от 0 до 65535.")
-                return null
-            }
-            v
-        } else {
-            0
-        }
-        return ch to valNum
+        return v
     }
 
     private fun setAdaptationButtonsEnabled(enabled: Boolean) {
         btnAdaptRead.isEnabled = enabled
-        btnAdaptTest.isEnabled = enabled
         btnAdaptSave.isEnabled = enabled
     }
 
     private fun performAdaptationRead() {
         val protocol = kwProtocol ?: return
-        val inputs = parseAdaptInputs(needValue = false) ?: return
-        val channel = inputs.first
+        val channel = 0
 
         lifecycleScope.launch {
             stopAllBackgroundLoops()
@@ -1263,37 +1230,18 @@ class MainActivity : AppCompatActivity() {
             if (res.success) {
                 etAdaptValue.setText(res.value.toString())
                 setResultText("✅ ${res.message}\n\n" +
-                        "Текущее сохранённое значение канала %02d загружено в поле «Значение».".format(res.channel))
+                        "Текущее сохранённое значение канала 00 загружено в поле «Значение».")
             } else {
-                val tip = if (channel == 0) {
-                    "\n\nℹ️ Подсказка: На многих блоках Mono-Motronic и Иммо канал 00 не поддерживает чтение — для сброса адаптаций / привязки ЭБУ введите значение 0 и сразу нажмите «СОХРАНИТЬ»."
-                } else ""
-                setResultText("⚠️ ${res.message}$tip")
-            }
-        }
-    }
-
-    private fun performAdaptationTest() {
-        val protocol = kwProtocol ?: return
-        val (channel, value) = parseAdaptInputs(needValue = true) ?: return
-
-        lifecycleScope.launch {
-            stopAllBackgroundLoops()
-            setAdaptationButtonsEnabled(false)
-            val res = protocol.testAdaptation(channel, value)
-            setAdaptationButtonsEnabled(true)
-
-            if (res.success) {
-                setResultText("🔍 ${res.message}\n\nЗначение $value принято блоком для проверки. Нажмите «СОХРАНИТЬ» для записи в EEPROM.")
-            } else {
-                setResultText("⚠️ ${res.message}")
+                setResultText("⚠️ ${res.message}\n\n" +
+                        "ℹ️ Подсказка: На многих блоках Mono-Motronic и Иммо канал 00 не поддерживает чтение — для сброса адаптаций / привязки ЭБУ введите значение 0 и сразу нажмите «СОХРАНИТЬ».")
             }
         }
     }
 
     private fun performAdaptationSave() {
         val protocol = kwProtocol ?: return
-        val (channel, value) = parseAdaptInputs(needValue = true) ?: return
+        val channel = 0
+        val value = parseAdaptValue() ?: return
 
         lifecycleScope.launch {
             stopAllBackgroundLoops()
@@ -1302,11 +1250,11 @@ class MainActivity : AppCompatActivity() {
             setAdaptationButtonsEnabled(true)
 
             if (res.success) {
-                val extra = if (selectedEcuAddress == 0x25 && channel == 0) {
+                val extra = if (selectedEcuAddress == 0x25) {
                     "\n\n🔑 ВАЖНО ДЛЯ ИММОБИЛАЙЗЕРА:\nВыключите зажигание минимум на 30 секунд для завершения привязки ЭБУ к иммобилайзеру."
-                } else if (selectedEcuAddress == 0x01 && channel == 0) {
+                } else {
                     "\n\n🔄 Сброс выученных адаптаций Mono-Motronic выполнен! После выключения зажигания на 15 сек блок заново обучит холостой ход."
-                } else ""
+                }
                 setResultText("✅ ${res.message}$extra")
             } else {
                 setResultText("⚠️ ${res.message}")

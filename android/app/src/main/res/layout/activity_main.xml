@@ -286,26 +286,16 @@
 
             <TextView
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Канал:"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:layout_marginEnd="6dp" />
-
-            <EditText
-                android:id="@+id/etAdaptChannel"
-                android:layout_width="64dp"
                 android:layout_height="44dp"
-                android:background="#0F172A"
-                android:text="00"
-                android:textColor="#38BDF8"
-                android:textSize="15sp"
-                android:textStyle="bold"
                 android:gravity="center"
-                android:inputType="number"
-                android:maxLength="3"
-                android:layout_marginEnd="12dp" />
+                android:background="#0F172A"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:text="Группа / Канал: 00"
+                android:textColor="#38BDF8"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="10dp" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -341,34 +331,21 @@
                 android:layout_width="0dp"
                 android:layout_height="48dp"
                 android:layout_weight="1"
-                android:layout_marginEnd="3dp"
+                android:layout_marginEnd="4dp"
                 android:text="ЧИТАТЬ"
-                android:textSize="12sp"
+                android:textSize="13sp"
                 android:textStyle="bold"
                 android:backgroundTint="#0284C7"
-                android:textColor="#FFFFFF" />
-
-            <Button
-                android:id="@+id/btnAdaptTest"
-                android:layout_width="0dp"
-                android:layout_height="48dp"
-                android:layout_weight="1"
-                android:layout_marginStart="3dp"
-                android:layout_marginEnd="3dp"
-                android:text="ТЕСТ"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:backgroundTint="#D97706"
                 android:textColor="#FFFFFF" />
 
             <Button
                 android:id="@+id/btnAdaptSave"
                 android:layout_width="0dp"
                 android:layout_height="48dp"
-                android:layout_weight="1.2"
-                android:layout_marginStart="3dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
                 android:text="СОХРАНИТЬ"
-                android:textSize="12sp"
+                android:textSize="13sp"
                 android:textStyle="bold"
                 android:backgroundTint="#10B981"
                 android:textColor="#FFFFFF" />

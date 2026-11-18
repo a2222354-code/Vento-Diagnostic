@@ -40,8 +40,6 @@ class OscilloscopeView @JvmOverloads constructor(
         AIR_TEMP("ДТВВ G42", "°C", Color.parseColor("#FB923C"), 20f),
         TIMING("УОЗ", "°", Color.parseColor("#FACC15"), 15f),
         LOAD("Нагрузка", "%", Color.parseColor("#60A5FA"), 25f),
-        SPEED("Скорость", "км/ч", Color.parseColor("#818CF8"), 40f),
-        ADAPTATION("Адапт.005", "%", Color.parseColor("#A3E635"), 10f),
         IDLE_SWITCH("Конц. F60", "", Color.parseColor("#34D399"), 1.2f, isDigital = true)
     }
 
@@ -351,23 +349,21 @@ class OscilloscopeView @JvmOverloads constructor(
         return when (ch) {
             SensorChannel.RPM -> "${ch.label}: ${latest.toInt()} [${obsMin.toInt()}..${obsMax.toInt()}]"
             SensorChannel.COOLANT,
-            SensorChannel.AIR_TEMP,
-            SensorChannel.SPEED -> "${ch.label}: ${latest.toInt()} ${ch.unit}"
+            SensorChannel.AIR_TEMP -> "${ch.label}: ${latest.toInt()} ${ch.unit}"
             SensorChannel.IDLE_SWITCH -> {
                 val st = if (latest >= 0.5f) "ЗАМКН.(ХХ)" else "РАЗОМКН."
                 "${ch.label}: $st"
             }
             SensorChannel.LAMBDA -> {
-                val u = lambdaUnitLabel
-                if (abs(obsMax - obsMin) <= 2.5f && abs(latest) <= 2.5f) {
-                    "${ch.label}: %.2f $u [%.2f..%.2f]".format(latest, obsMin, obsMax)
-                } else {
-                    "${ch.label}: %.1f%% [%.0f..%.0f]".format(latest, obsMin, obsMax)
+                when (lambdaUnitLabel) {
+                    "λ" -> "${ch.label}: ${"%.3f".format(latest)} λ [${"%.3f".format(obsMin)}..${"%.3f".format(obsMax)}]"
+                    "В" -> "${ch.label}: ${"%.2f".format(latest)} В [${"%.2f".format(obsMin)}..${"%.2f".format(obsMax)}]"
+                    else -> "${ch.label}: ${"%.1f".format(latest)} % [${"%.0f".format(obsMin)}..${"%.0f".format(obsMax)}]"
                 }
             }
             SensorChannel.BATTERY,
-            SensorChannel.INJECTION -> "${ch.label}: %.2f ${ch.unit} [%.2f..%.2f]".format(latest, obsMin, obsMax)
-            else -> "${ch.label}: %.1f ${ch.unit} [%.1f..%.1f]".format(latest, obsMin, obsMax)
+            SensorChannel.INJECTION -> "${ch.label}: ${"%.2f".format(latest)} ${ch.unit} [${"%.2f".format(obsMin)}..${"%.2f".format(obsMax)}]"
+            else -> "${ch.label}: ${"%.1f".format(latest)} ${ch.unit} [${"%.1f".format(obsMin)}..${"%.1f".format(obsMax)}]"
         }
     }
 }
