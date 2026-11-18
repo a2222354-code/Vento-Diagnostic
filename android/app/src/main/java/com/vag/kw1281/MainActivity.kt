@@ -1,5 +1,6 @@
 package com.vag.kw1281
 
+import android.app.Dialog
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.ClipData
@@ -9,11 +10,14 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
 import android.view.View
+import android.view.Window
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -22,6 +26,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.vag.kw1281.OscilloscopeView.SensorChannel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -44,21 +49,53 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTabImmo: Button
     private var selectedEcuAddress: Int = 0x01 // 0x01 = Двигатель, 0x25 = Иммобилайзер
 
-    // Панели живых параметров (Engine)
-    private lateinit var layoutLiveData: LinearLayout
-    private lateinit var tvGaugeRpm: TextView
-    private lateinit var tvGaugeTemp: TextView
-    private lateinit var tvGaugeLambda: TextView
-    private lateinit var tvGaugeLambdaUnit: TextView
-    private lateinit var tvGaugeThrottle: TextView
-    private lateinit var tvGaugeBattery: TextView
-    private lateinit var tvGaugeInj: TextView
-    private lateinit var tvGaugeAirTemp: TextView
-    private lateinit var tvGaugeTiming: TextView
-    private lateinit var tvGaugeLoad: TextView
-    private lateinit var tvGaugeSpeed: TextView
-    private lateinit var tvGaugeAdapt: TextView
-    private lateinit var tvGaugeIdleSwitch: TextView
+    // Отдельное окно измерений и осциллограф
+    private var measuringDialog: Dialog? = null
+    private val selectedScopeChannels = linkedSetOf(SensorChannel.RPM, SensorChannel.LAMBDA)
+    private var isScopePanelVisible: Boolean = true
+
+    private class MeasuringWindowViews(dialog: Dialog) {
+        val tvStatus: TextView = dialog.findViewById(R.id.tvMeasStatus)
+        val btnToggleScope: Button = dialog.findViewById(R.id.btnToggleScope)
+        val btnClose: Button = dialog.findViewById(R.id.btnCloseMeas)
+        val layoutScopePanel: LinearLayout = dialog.findViewById(R.id.layoutOscilloscopePanel)
+        val tvScopeCount: TextView = dialog.findViewById(R.id.tvScopeCount)
+        val btnScopeWindow: Button = dialog.findViewById(R.id.btnScopeWindow)
+        val btnScopePause: Button = dialog.findViewById(R.id.btnScopePause)
+        val btnScopeClear: Button = dialog.findViewById(R.id.btnScopeClear)
+        val scopeView: OscilloscopeView = dialog.findViewById(R.id.oscilloscopeView)
+
+        val tvRpm: TextView = dialog.findViewById(R.id.tvMeasRpm)
+        val tvTemp: TextView = dialog.findViewById(R.id.tvMeasTemp)
+        val tvLambda: TextView = dialog.findViewById(R.id.tvMeasLambda)
+        val tvLambdaUnit: TextView = dialog.findViewById(R.id.tvMeasLambdaUnit)
+        val tvThrottle: TextView = dialog.findViewById(R.id.tvMeasThrottle)
+        val tvBattery: TextView = dialog.findViewById(R.id.tvMeasBattery)
+        val tvInj: TextView = dialog.findViewById(R.id.tvMeasInj)
+        val tvAirTemp: TextView = dialog.findViewById(R.id.tvMeasAirTemp)
+        val tvTiming: TextView = dialog.findViewById(R.id.tvMeasTiming)
+        val tvLoad: TextView = dialog.findViewById(R.id.tvMeasLoad)
+        val tvSpeed: TextView = dialog.findViewById(R.id.tvMeasSpeed)
+        val tvAdapt: TextView = dialog.findViewById(R.id.tvMeasAdapt)
+        val tvIdleSwitch: TextView = dialog.findViewById(R.id.tvMeasIdleSwitch)
+        val tvMode: TextView = dialog.findViewById(R.id.tvMeasMode)
+        val tvRawGroups: TextView = dialog.findViewById(R.id.tvMeasRawGroups)
+
+        val channelCards: Map<SensorChannel, Pair<LinearLayout, TextView>> = mapOf(
+            SensorChannel.RPM to (dialog.findViewById<LinearLayout>(R.id.cardRpm) to dialog.findViewById<TextView>(R.id.tvBadgeRpm)),
+            SensorChannel.COOLANT to (dialog.findViewById<LinearLayout>(R.id.cardTemp) to dialog.findViewById<TextView>(R.id.tvBadgeTemp)),
+            SensorChannel.LAMBDA to (dialog.findViewById<LinearLayout>(R.id.cardLambda) to dialog.findViewById<TextView>(R.id.tvBadgeLambda)),
+            SensorChannel.THROTTLE to (dialog.findViewById<LinearLayout>(R.id.cardThrottle) to dialog.findViewById<TextView>(R.id.tvBadgeThrottle)),
+            SensorChannel.BATTERY to (dialog.findViewById<LinearLayout>(R.id.cardBattery) to dialog.findViewById<TextView>(R.id.tvBadgeBattery)),
+            SensorChannel.INJECTION to (dialog.findViewById<LinearLayout>(R.id.cardInj) to dialog.findViewById<TextView>(R.id.tvBadgeInj)),
+            SensorChannel.AIR_TEMP to (dialog.findViewById<LinearLayout>(R.id.cardAirTemp) to dialog.findViewById<TextView>(R.id.tvBadgeAirTemp)),
+            SensorChannel.TIMING to (dialog.findViewById<LinearLayout>(R.id.cardTiming) to dialog.findViewById<TextView>(R.id.tvBadgeTiming)),
+            SensorChannel.LOAD to (dialog.findViewById<LinearLayout>(R.id.cardLoad) to dialog.findViewById<TextView>(R.id.tvBadgeLoad)),
+            SensorChannel.SPEED to (dialog.findViewById<LinearLayout>(R.id.cardSpeed) to dialog.findViewById<TextView>(R.id.tvBadgeSpeed)),
+            SensorChannel.ADAPTATION to (dialog.findViewById<LinearLayout>(R.id.cardAdapt) to dialog.findViewById<TextView>(R.id.tvBadgeAdapt)),
+            SensorChannel.IDLE_SWITCH to (dialog.findViewById<LinearLayout>(R.id.cardIdleSwitch) to dialog.findViewById<TextView>(R.id.tvBadgeIdleSwitch))
+        )
+    }
 
     // Панель иммобилайзера (Immo)
     private lateinit var layoutImmoStatus: LinearLayout
@@ -163,21 +200,6 @@ class MainActivity : AppCompatActivity() {
             btnTabEngine = findViewById(R.id.btnTabEngine)
             btnTabImmo = findViewById(R.id.btnTabImmo)
 
-            layoutLiveData = findViewById(R.id.layoutLiveData)
-            tvGaugeRpm = findViewById(R.id.tvGaugeRpm)
-            tvGaugeTemp = findViewById(R.id.tvGaugeTemp)
-            tvGaugeLambda = findViewById(R.id.tvGaugeLambda)
-            tvGaugeLambdaUnit = findViewById(R.id.tvGaugeLambdaUnit)
-            tvGaugeThrottle = findViewById(R.id.tvGaugeThrottle)
-            tvGaugeBattery = findViewById(R.id.tvGaugeBattery)
-            tvGaugeInj = findViewById(R.id.tvGaugeInj)
-            tvGaugeAirTemp = findViewById(R.id.tvGaugeAirTemp)
-            tvGaugeTiming = findViewById(R.id.tvGaugeTiming)
-            tvGaugeLoad = findViewById(R.id.tvGaugeLoad)
-            tvGaugeSpeed = findViewById(R.id.tvGaugeSpeed)
-            tvGaugeAdapt = findViewById(R.id.tvGaugeAdapt)
-            tvGaugeIdleSwitch = findViewById(R.id.tvGaugeIdleSwitch)
-
             layoutImmoStatus = findViewById(R.id.layoutImmoStatus)
             tvImmoKeyStatus = findViewById(R.id.tvImmoKeyStatus)
             tvImmoStartStatus = findViewById(R.id.tvImmoStartStatus)
@@ -270,7 +292,6 @@ class MainActivity : AppCompatActivity() {
             updateConnectButtonState(connected = false)
         }
         selectedEcuAddress = addr
-        resetGauges()
 
         if (addr == 0x01) {
             btnTabEngine.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0284C7"))
@@ -279,7 +300,6 @@ class MainActivity : AppCompatActivity() {
             btnTabImmo.setTextColor(Color.parseColor("#94A3B8"))
 
             tvDeviceInfo.text = "Блок: Bosch Mono-Motronic 1.2.3 (3A0 907 311)"
-            layoutLiveData.visibility = View.VISIBLE
             layoutImmoStatus.visibility = View.GONE
             rowEngineDiagnostics.visibility = View.VISIBLE
             btnMeasuring.visibility = View.VISIBLE
@@ -296,7 +316,6 @@ class MainActivity : AppCompatActivity() {
             btnTabEngine.setTextColor(Color.parseColor("#94A3B8"))
 
             tvDeviceInfo.text = "Блок: Иммобилайзер Wegfahrsicherung (1H0 953 257)"
-            layoutLiveData.visibility = View.GONE
             layoutImmoStatus.visibility = View.VISIBLE
             tvImmoKeyStatus.text = "• Транспондер ключа: Ожидание опроса..."
             tvImmoStartStatus.text = "• Разрешение пуска двигателя: Не проверено"
@@ -310,23 +329,6 @@ class MainActivity : AppCompatActivity() {
             btnAdaptationOpen.visibility = View.VISIBLE
             tvAdaptHint.text = "Канал 00: привязка ЭБУ к иммобилайзеру (Сохранить 0) • Канал 01: кол-во ключей"
         }
-    }
-
-    private fun resetGauges() {
-        tvGaugeRpm.text = "---"
-        tvGaugeTemp.text = "---"
-        tvGaugeLambda.text = "---"
-        tvGaugeLambdaUnit.text = "Вольт"
-        tvGaugeThrottle.text = "---"
-        tvGaugeBattery.text = "---"
-        tvGaugeInj.text = "---"
-        tvGaugeAirTemp.text = "---"
-        tvGaugeTiming.text = "---"
-        tvGaugeLoad.text = "---"
-        tvGaugeSpeed.text = "---"
-        tvGaugeAdapt.text = "---"
-        tvGaugeIdleSwitch.text = "Концевик ДЗ (F60): ---  •  Режим: ---"
-        tvGaugeIdleSwitch.setTextColor(Color.parseColor("#94A3B8"))
     }
 
     private fun setResultText(msg: String) {
@@ -454,7 +456,6 @@ class MainActivity : AppCompatActivity() {
                 layoutAdaptation.visibility = View.GONE
                 btnConnectEcu.isEnabled = false
                 setDiagnosticButtonsEnabled(false)
-                resetGauges()
 
                 val blockName = if (selectedEcuAddress == 0x25) "Иммобилайзера (0x25)" else "ЭБУ Двигателя (0x01)"
                 tvStatus.text = "Инициализация $blockName..."
@@ -616,9 +617,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleLiveMeasuring() {
-        if (liveStreamJob != null) {
+        if (measuringDialog?.isShowing == true || liveStreamJob != null) {
             stopLiveStream()
-            setResultText("Поток живых измерений остановлен.")
+            setResultText("Окно измерений закрыто. Связь с ЭБУ активна.")
             return
         }
 
@@ -629,9 +630,83 @@ class MainActivity : AppCompatActivity() {
 
         stopBasicSettingsStream()
         layoutActuatorTest.visibility = View.GONE
-        btnMeasuring.text = "СТОП (08)"
+        layoutAdaptation.visibility = View.GONE
+
+        val dialog = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dialog.setContentView(R.layout.dialog_measuring)
+        dialog.window?.setLayout(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT
+        )
+        measuringDialog = dialog
+
+        val views = MeasuringWindowViews(dialog)
+        views.scopeView.setActiveChannels(selectedScopeChannels)
+        updateScopeHeaderAndCards(views)
+
+        views.btnToggleScope.setOnClickListener {
+            isScopePanelVisible = !isScopePanelVisible
+            updateScopeHeaderAndCards(views)
+        }
+
+        views.btnScopeWindow.setOnClickListener {
+            val nextWindow = when (views.scopeView.getTimeWindowSeconds()) {
+                15 -> 30_000L
+                30 -> 60_000L
+                else -> 15_000L
+            }
+            views.scopeView.setTimeWindowMs(nextWindow)
+            views.btnScopeWindow.text = "${nextWindow / 1000L}с"
+        }
+
+        views.btnScopePause.setOnClickListener {
+            val paused = !views.scopeView.isPausedState()
+            views.scopeView.setPaused(paused)
+            views.btnScopePause.text = if (paused) "ПУСК" else "ПАУЗА"
+            views.btnScopePause.backgroundTintList = ColorStateList.valueOf(
+                Color.parseColor(if (paused) "#D97706" else "#334155")
+            )
+        }
+
+        views.btnScopeClear.setOnClickListener {
+            views.scopeView.clearSamples()
+        }
+
+        for ((channel, pair) in views.channelCards) {
+            val (card, _) = pair
+            card.setOnClickListener {
+                if (selectedScopeChannels.contains(channel)) {
+                    selectedScopeChannels.remove(channel)
+                } else {
+                    selectedScopeChannels.add(channel)
+                    if (!isScopePanelVisible) {
+                        isScopePanelVisible = true
+                    }
+                }
+                views.scopeView.setActiveChannels(selectedScopeChannels)
+                updateScopeHeaderAndCards(views)
+            }
+        }
+
+        var closedByDismiss = false
+        views.btnClose.setOnClickListener {
+            dialog.dismiss()
+        }
+        dialog.setOnDismissListener {
+            if (!closedByDismiss) {
+                closedByDismiss = true
+                measuringDialog = null
+                cancelLiveStreamJobOnly()
+                setResultText("Окно измерений закрыто. Связь с ЭБУ активна.")
+            }
+        }
+
+        dialog.show()
+
+        btnMeasuring.text = "ОКНО ОТКРЫТО"
         btnMeasuring.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#DC2626"))
-        setResultText("Скоростной опрос всех датчиков ЭБУ (Группы 001, 003, 004 + 002/005)...")
+        setResultText("Открыто окно измерений и осциллограммы (Группы 001, 003, 004 + 002/005)...")
 
         // Пауза фонового keep-alive 0x09 ускоряет опрос и исключает конкуренцию за busMutex
         protocol.isKeepAlivePaused = true
@@ -644,6 +719,7 @@ class MainActivity : AppCompatActivity() {
             var g2Supported = true
             var consecutiveErrors = 0
             var cycleCount = 0
+            var prevUpdateMs = 0L
 
             var lastRpm: Int? = null
             var lastTemp: Int? = null
@@ -655,6 +731,7 @@ class MainActivity : AppCompatActivity() {
             var lastBatteryV: Double? = null
             var lastInjMs: Double? = null
             var lastTiming: String? = null
+            var lastTimingDeg: Double? = null
             var lastLoadPct: Double? = null
             var lastSpeedKmh: Int? = null
             var lastAdaptPct: Double? = null
@@ -663,7 +740,7 @@ class MainActivity : AppCompatActivity() {
             var lastStatusBits: String? = null
 
             try {
-                while (isActive && protocol.isSessionActive) {
+                while (isActive && protocol.isSessionActive && dialog.isShowing) {
                     var gotValid = false
                     var lastErr: String? = null
                     var g1Fields = emptyList<Kw1281Protocol.MeasuredField>()
@@ -706,6 +783,7 @@ class MainActivity : AppCompatActivity() {
                                 m3.throttleAngle?.let { lastThrottle = it }
                                 m3.engineLoadPct?.let { lastLoadPct = it }
                                 m3.ignitionTiming?.let { lastTiming = it }
+                                m3.ignitionTimingDeg?.let { lastTimingDeg = it }
                                 m3.intakeAirTemp?.let { if (lastAirTemp == null) lastAirTemp = it }
                                 g3Fields = m3.fields
                             } else if (m3?.isUnsupportedNak == true) {
@@ -795,76 +873,103 @@ class MainActivity : AppCompatActivity() {
 
                     if (gotValid) {
                         consecutiveErrors = 0
-                        updateGaugeViews(
-                            rpm = lastRpm,
-                            temp = lastTemp,
-                            lambdaV = lastLambdaV,
-                            lambdaCorr = lastLambdaCorr,
-                            lambdaFactor = lastLambdaFactor,
-                            throttle = lastThrottle,
-                            batteryV = lastBatteryV,
-                            injMs = lastInjMs,
-                            airTemp = lastAirTemp,
-                            timing = lastTiming,
-                            loadPct = lastLoadPct,
-                            speedKmh = lastSpeedKmh,
-                            adaptPct = lastAdaptPct,
-                            idleSwitchClosed = lastIdleSwitchClosed,
-                            modeText = lastModeText,
-                            statusBits = lastStatusBits
-                        )
+                        val nowMs = System.currentTimeMillis()
+                        val hzText = if (prevUpdateMs > 0L && nowMs > prevUpdateMs) {
+                            val hz = 1000.0 / (nowMs - prevUpdateMs).toDouble()
+                            "%.1f Гц".format(hz)
+                        } else {
+                            "опрос..."
+                        }
+                        prevUpdateMs = nowMs
 
-                        val sb = StringBuilder()
-                        sb.append(if (useGroupZeroOnly) "ЖИВЫЕ ПАРАМЕТРЫ (ГРУППА 000):\n" else "ЖИВЫЕ ПАРАМЕТРЫ ДАТЧИКОВ:\n")
-                        sb.append("• Обороты (G40): ").append(lastRpm?.let { "$it об/мин" } ?: "---").append("\n")
-                        sb.append("• ДТОЖ (G62): ").append(lastTemp?.let { "$it °C" } ?: "---").append("\n")
-                        val lambdaText = when {
-                            lastLambdaV != null -> "%.2f В".format(lastLambdaV)
-                            lastLambdaCorr != null -> "%.1f %% (коррекция)".format(lastLambdaCorr)
-                            lastLambdaFactor != null -> "%.3f λ".format(lastLambdaFactor)
-                            else -> "---"
+                        val sampleMap = LinkedHashMap<SensorChannel, Float>()
+                        lastRpm?.let { sampleMap[SensorChannel.RPM] = it.toFloat() }
+                        lastTemp?.let { sampleMap[SensorChannel.COOLANT] = it.toFloat() }
+                        val lambdaNumeric = lastLambdaV ?: lastLambdaCorr ?: lastLambdaFactor
+                        val lambdaUnit = when {
+                            lastLambdaV != null -> "В"
+                            lastLambdaCorr != null -> "%"
+                            else -> "λ"
                         }
-                        sb.append("• Лямбда-зонд (G39): ").append(lambdaText).append("\n")
-                        sb.append("• ДПДЗ угол (G69): ").append(lastThrottle?.let { "%.1f °".format(it) } ?: "---").append("\n")
-                        val switchStr = when (lastIdleSwitchClosed) {
-                            true -> "ЗАМКНУТ (Холостой ход)"
-                            false -> "РАЗМКНУТ (Педаль газа нажата)"
-                            null -> "---"
-                        }
-                        sb.append("• Концевик ДЗ (F60): ").append(switchStr)
-                        lastModeText?.let { sb.append(" • Режим: $it") }
-                        sb.append("\n")
-                        lastBatteryV?.let { sb.append("• Напряжение АКБ: %.2f В\n".format(it)) }
-                        lastInjMs?.let { sb.append("• Время впрыска: %.2f мс\n".format(it)) }
-                        lastAirTemp?.let { sb.append("• ДТВВ (G42): $it °C\n") }
-                        lastTiming?.let { sb.append("• УОЗ: $it\n") }
-                        lastLoadPct?.let { sb.append("• Нагрузка двигателя: %.1f %%\n".format(it)) }
-                        lastSpeedKmh?.let { sb.append("• Скорость авто (G68): $it км/ч\n") }
-                        lastAdaptPct?.let { sb.append("• Адаптация смеси (Гр.005): %.1f %%\n".format(it)) }
+                        lambdaNumeric?.let { sampleMap[SensorChannel.LAMBDA] = it.toFloat() }
+                        lastThrottle?.let { sampleMap[SensorChannel.THROTTLE] = it.toFloat() }
+                        lastBatteryV?.let { sampleMap[SensorChannel.BATTERY] = it.toFloat() }
+                        lastInjMs?.let { sampleMap[SensorChannel.INJECTION] = it.toFloat() }
+                        lastAirTemp?.let { sampleMap[SensorChannel.AIR_TEMP] = it.toFloat() }
+                        lastTimingDeg?.let { sampleMap[SensorChannel.TIMING] = it.toFloat() }
+                        lastLoadPct?.let { sampleMap[SensorChannel.LOAD] = it.toFloat() }
+                        lastSpeedKmh?.let { sampleMap[SensorChannel.SPEED] = it.toFloat() }
+                        lastAdaptPct?.let { sampleMap[SensorChannel.ADAPTATION] = it.toFloat() }
+                        lastIdleSwitchClosed?.let { sampleMap[SensorChannel.IDLE_SWITCH] = if (it) 1f else 0f }
 
-                        if (g1Fields.isNotEmpty()) {
-                            sb.append("\nГруппа 001: ").append(g1Fields.joinToString(" | ") { it.valueText })
+                        val rawSummary = buildString {
+                            append(if (useGroupZeroOnly) "Режим: Группа 000 (10 байт)\n" else "Сырые группы KWP1281:\n")
+                            if (g1Fields.isNotEmpty()) append("Гр.001: ${g1Fields.joinToString(" | ") { it.valueText }}\n")
+                            if (g2Fields.isNotEmpty()) append("Гр.002: ${g2Fields.joinToString(" | ") { it.valueText }}\n")
+                            if (g3Fields.isNotEmpty()) append("Гр.003: ${g3Fields.joinToString(" | ") { it.valueText }}\n")
+                            if (g4Fields.isNotEmpty()) append("Гр.004: ${g4Fields.joinToString(" | ") { it.valueText }}\n")
+                            if (g5Fields.isNotEmpty()) append("Гр.005: ${g5Fields.joinToString(" | ") { it.valueText }}\n")
+                            if (g0Raw.isNotEmpty()) append("Байты 000: ${g0Raw.joinToString(" ") { "%03d".format(it) }}")
+                        }.trim()
+
+                        runOnUiThread {
+                            if (!dialog.isShowing) return@runOnUiThread
+                            views.tvStatus.text = "${protocol.negotiatedBaud} бод • Частота: $hzText"
+                            views.scopeView.setLambdaUnitLabel(lambdaUnit)
+                            views.scopeView.appendSample(nowMs, sampleMap)
+
+                            lastRpm?.let { views.tvRpm.text = "$it" }
+                            lastTemp?.let { views.tvTemp.text = "$it" }
+                            if (lastLambdaV != null) {
+                                views.tvLambda.text = "%.2f".format(lastLambdaV)
+                                views.tvLambdaUnit.text = "Вольт"
+                            } else if (lastLambdaCorr != null) {
+                                views.tvLambda.text = "%.1f".format(lastLambdaCorr)
+                                views.tvLambdaUnit.text = "% коррекция"
+                            } else if (lastLambdaFactor != null) {
+                                views.tvLambda.text = "%.3f".format(lastLambdaFactor)
+                                views.tvLambdaUnit.text = "λ фактор"
+                            }
+                            lastThrottle?.let { views.tvThrottle.text = "%.1f".format(it) }
+                            lastBatteryV?.let { views.tvBattery.text = "%.2f".format(it) }
+                            lastInjMs?.let { views.tvInj.text = "%.2f".format(it) }
+                            lastAirTemp?.let { views.tvAirTemp.text = "$it" }
+                            lastTiming?.let { views.tvTiming.text = it }
+                            lastLoadPct?.let { views.tvLoad.text = "%.0f%%".format(it) }
+                            lastSpeedKmh?.let { views.tvSpeed.text = "$it" }
+                            lastAdaptPct?.let { views.tvAdapt.text = "%.1f%%".format(it) }
+
+                            if (lastIdleSwitchClosed != null || lastModeText != null || lastStatusBits != null) {
+                                when (lastIdleSwitchClosed) {
+                                    true -> {
+                                        views.tvIdleSwitch.text = "ЗАМКНУТ (ХХ)"
+                                        views.tvIdleSwitch.setTextColor(Color.parseColor("#10B981"))
+                                    }
+                                    false -> {
+                                        views.tvIdleSwitch.text = "РАЗОМКНУТ (Газ)"
+                                        views.tvIdleSwitch.setTextColor(Color.parseColor("#F59E0B"))
+                                    }
+                                    null -> {
+                                        views.tvIdleSwitch.text = "---"
+                                        views.tvIdleSwitch.setTextColor(Color.parseColor("#94A3B8"))
+                                    }
+                                }
+                                views.tvMode.text = "Режим: ${lastModeText ?: lastStatusBits ?: "---"}"
+                            }
+
+                            if (rawSummary.isNotEmpty()) {
+                                views.tvRawGroups.text = rawSummary
+                            }
                         }
-                        if (g2Fields.isNotEmpty()) {
-                            sb.append("\nГруппа 002: ").append(g2Fields.joinToString(" | ") { it.valueText })
-                        }
-                        if (g3Fields.isNotEmpty()) {
-                            sb.append("\nГруппа 003: ").append(g3Fields.joinToString(" | ") { it.valueText })
-                        }
-                        if (g4Fields.isNotEmpty()) {
-                            sb.append("\nГруппа 004: ").append(g4Fields.joinToString(" | ") { it.valueText })
-                        }
-                        if (g5Fields.isNotEmpty()) {
-                            sb.append("\nГруппа 005: ").append(g5Fields.joinToString(" | ") { it.valueText })
-                        }
-                        if (g0Raw.isNotEmpty()) {
-                            sb.append("\nБайты 000: ").append(g0Raw.joinToString(" ") { "%03d".format(it) })
-                        }
-                        setResultText(sb.toString())
                     } else {
                         consecutiveErrors++
                         if (consecutiveErrors >= 3) {
-                            setResultText("⚠️ Нет данных от ЭБУ при чтении измерений.\nПричина: ${lastErr ?: "ЭБУ не отвечает"}.\nПроверьте зажигание и соединение K-Line.")
+                            runOnUiThread {
+                                if (dialog.isShowing) {
+                                    views.tvStatus.text = "Нет ответа от ЭБУ..."
+                                    views.tvRawGroups.text = "⚠️ Нет данных от ЭБУ при чтении измерений.\nПричина: ${lastErr ?: "ЭБУ не отвечает"}.\nПроверьте зажигание и соединение K-Line."
+                                }
+                            }
                         }
                     }
 
@@ -886,7 +991,38 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun stopLiveStream() {
+    private fun updateScopeHeaderAndCards(views: MeasuringWindowViews) {
+        val density = resources.displayMetrics.density
+        views.layoutScopePanel.visibility = if (isScopePanelVisible) View.VISIBLE else View.GONE
+        views.btnToggleScope.text = if (isScopePanelVisible) "СКРЫТЬ ГРАФИК" else "ГРАФИКИ"
+        views.btnToggleScope.backgroundTintList = ColorStateList.valueOf(
+            Color.parseColor(if (isScopePanelVisible) "#0284C7" else "#334155")
+        )
+        views.tvScopeCount.text = "ОСЦИЛЛОГРАММА (${selectedScopeChannels.size} кан.)"
+
+        for ((channel, pair) in views.channelCards) {
+            val (card, badge) = pair
+            val active = selectedScopeChannels.contains(channel)
+            val bg = GradientDrawable().apply {
+                setColor(Color.parseColor(if (active) "#0F172A" else "#1E293B"))
+                cornerRadius = 8f * density
+                setStroke(
+                    if (active) (2f * density).toInt() else (1f * density).toInt(),
+                    if (active) channel.colorInt else Color.parseColor("#334155")
+                )
+            }
+            card.background = bg
+            if (active) {
+                badge.text = "● НА ГРАФИКЕ"
+                badge.setTextColor(channel.colorInt)
+            } else {
+                badge.text = "+ график"
+                badge.setTextColor(Color.parseColor("#64748B"))
+            }
+        }
+    }
+
+    private fun cancelLiveStreamJobOnly() {
         liveStreamJob?.cancel()
         liveStreamJob = null
         if (basicSettingsJob == null) {
@@ -898,61 +1034,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateGaugeViews(
-        rpm: Int?,
-        temp: Int?,
-        lambdaV: Double?,
-        lambdaCorr: Double?,
-        lambdaFactor: Double?,
-        throttle: Double?,
-        batteryV: Double? = null,
-        injMs: Double? = null,
-        airTemp: Int? = null,
-        timing: String? = null,
-        loadPct: Double? = null,
-        speedKmh: Int? = null,
-        adaptPct: Double? = null,
-        idleSwitchClosed: Boolean? = null,
-        modeText: String? = null,
-        statusBits: String? = null
-    ) {
-        runOnUiThread {
-            rpm?.let { tvGaugeRpm.text = "$it" }
-            temp?.let { tvGaugeTemp.text = "$it" }
-            if (lambdaV != null) {
-                tvGaugeLambda.text = "%.2f".format(lambdaV)
-                tvGaugeLambdaUnit.text = "Вольт"
-            } else if (lambdaCorr != null) {
-                tvGaugeLambda.text = "%.1f".format(lambdaCorr)
-                tvGaugeLambdaUnit.text = "% корр."
-            } else if (lambdaFactor != null) {
-                tvGaugeLambda.text = "%.3f".format(lambdaFactor)
-                tvGaugeLambdaUnit.text = "λ факт."
-            }
-            throttle?.let { tvGaugeThrottle.text = "%.1f".format(it) }
-            batteryV?.let { tvGaugeBattery.text = "%.2f".format(it) }
-            injMs?.let { tvGaugeInj.text = "%.2f".format(it) }
-            airTemp?.let { tvGaugeAirTemp.text = "$it" }
-            timing?.let { tvGaugeTiming.text = it }
-            loadPct?.let { tvGaugeLoad.text = "%.0f%%".format(it) }
-            speedKmh?.let { tvGaugeSpeed.text = "$it км/ч" }
-            adaptPct?.let { tvGaugeAdapt.text = "%.1f%%".format(it) }
-
-            if (idleSwitchClosed != null || modeText != null || statusBits != null) {
-                val f60Label = when (idleSwitchClosed) {
-                    true -> "✅ ЗАМКНУТ (ХХ)"
-                    false -> "⚡ РАЗОМКНУТ (Газ)"
-                    null -> "---"
-                }
-                val modePart = modeText ?: statusBits ?: "---"
-                tvGaugeIdleSwitch.text = "Концевик ДЗ (F60): $f60Label  •  $modePart"
-                when (idleSwitchClosed) {
-                    true -> tvGaugeIdleSwitch.setTextColor(Color.parseColor("#10B981"))
-                    false -> tvGaugeIdleSwitch.setTextColor(Color.parseColor("#F59E0B"))
-                    null -> tvGaugeIdleSwitch.setTextColor(Color.parseColor("#94A3B8"))
-                }
-            }
-        }
+    private fun stopLiveStream() {
+        cancelLiveStreamJobOnly()
+        try {
+            measuringDialog?.dismiss()
+        } catch (_: Throwable) {}
+        measuringDialog = null
     }
 
     // Тест исполнительных механизмов (0x04)
@@ -1068,26 +1155,22 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     val m = res.measurement
-                    if (m != null) {
-                        updateGaugeViews(
-                            rpm = m.rpm,
-                            temp = m.coolantTemp,
-                            lambdaV = m.lambdaVoltage,
-                            lambdaCorr = m.lambdaCorrection,
-                            lambdaFactor = m.lambdaFactor,
-                            throttle = m.throttleAngle,
-                            batteryV = m.batteryVoltage,
-                            injMs = m.injectionTimeMs,
-                            airTemp = m.intakeAirTemp,
-                            timing = m.ignitionTiming,
-                            loadPct = m.engineLoadPct,
-                            speedKmh = m.vehicleSpeedKmh,
-                            adaptPct = m.mixtureAdaptationPct,
-                            idleSwitchClosed = m.idleSwitchClosed,
-                            modeText = m.operatingModeText,
-                            statusBits = m.rawStatusBits
-                        )
-                    }
+                    val sensorSummary = if (m != null) {
+                        buildString {
+                            m.rpm?.let { append("• Обороты: $it об/мин\n") }
+                            m.coolantTemp?.let { append("• ДТОЖ: $it °C\n") }
+                            m.throttleAngle?.let { append("• ДПДЗ: %.1f °\n".format(it)) }
+                            m.ignitionTiming?.let { append("• УОЗ: $it\n") }
+                            when {
+                                m.lambdaVoltage != null -> append("• Лямбда: %.2f В\n".format(m.lambdaVoltage))
+                                m.lambdaCorrection != null -> append("• Лямбда: %.1f %%\n".format(m.lambdaCorrection))
+                                m.lambdaFactor != null -> append("• Лямбда: %.3f λ\n".format(m.lambdaFactor))
+                            }
+                            m.idleSwitchClosed?.let {
+                                append("• Концевик ДЗ (F60): ${if (it) "ЗАМКНУТ (ХХ)" else "РАЗОМКНУТ"}\n")
+                            }
+                        }
+                    } else ""
 
                     val extraLine = when {
                         m != null && m.rawValues.isNotEmpty() && m.rawValues.size == 10 ->
@@ -1100,6 +1183,7 @@ class MainActivity : AppCompatActivity() {
                     setResultText("🔧 РЕЖИМ БАЗОВЫХ УСТАНОВОК (Группа %03d) АКТИВЕН!\n\n".format(activeGroup) +
                             "• ЭБУ зафиксировал базовый угол опережения зажигания (keep-alive 0x09 приостановлен).\n" +
                             "• Для регулировки УОЗ 6° до ВМТ проверьте прогрев (>80°C) и работайте стробоскопом по метке маховика.\n" +
+                            (if (sensorSummary.isNotEmpty()) "\n$sensorSummary" else "") +
                             "• $extraLine\n\n" +
                             "Нажмите «СТОП БАЗОВЫЕ» для выхода из режима.")
 

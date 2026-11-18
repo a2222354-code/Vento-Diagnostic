@@ -70,6 +70,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val intakeAirTemp: Int? = null,
         val injectionTimeMs: Double? = null,
         val ignitionTiming: String? = null,
+        val ignitionTimingDeg: Double? = null,
         val engineLoadPct: Double? = null,
         val vehicleSpeedKmh: Int? = null,
         val mixtureAdaptationPct: Double? = null,
@@ -1116,6 +1117,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         var parsedBatteryV: Double? = null
         var parsedInjMs: Double? = null
         var parsedTiming: String? = null
+        var parsedTimingDeg: Double? = null
         var parsedLoadPct: Double? = null
         var parsedSpeedKmh: Int? = null
         var parsedMixtureAdaptPct: Double? = null
@@ -1172,13 +1174,17 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 FieldKind.ANGLE -> {
                     // В группе 3 поле 3 — угол ДПДЗ (G69), а поле 4 может быть УОЗ!
                     if (group == 3 && itemNum == 4) {
-                        if (parsedTiming == null) parsedTiming = "%.1f°".format(decoded.numeric)
+                        if (parsedTiming == null) {
+                            parsedTiming = "%.1f°".format(decoded.numeric)
+                            parsedTimingDeg = decoded.numeric
+                        }
                     } else if (itemNum == 3 || (group != 3 && parsedThrottle == null)) {
                         parsedThrottle = decoded.numeric
                     }
                 }
                 FieldKind.TIMING -> {
                     parsedTiming = decoded.displayText
+                    parsedTimingDeg = if (b < 127) decoded.numeric else -decoded.numeric
                 }
                 FieldKind.LOAD_PCT -> {
                     if (group == 3 || group == 4) {
@@ -1252,6 +1258,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             intakeAirTemp = parsedAirTemp,
             injectionTimeMs = parsedInjMs,
             ignitionTiming = parsedTiming,
+            ignitionTimingDeg = parsedTimingDeg,
             engineLoadPct = parsedLoadPct,
             vehicleSpeedKmh = parsedSpeedKmh,
             mixtureAdaptationPct = parsedMixtureAdaptPct,

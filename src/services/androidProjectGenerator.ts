@@ -504,6 +504,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val intakeAirTemp: Int? = null,
         val injectionTimeMs: Double? = null,
         val ignitionTiming: String? = null,
+        val ignitionTimingDeg: Double? = null,
         val engineLoadPct: Double? = null,
         val vehicleSpeedKmh: Int? = null,
         val mixtureAdaptationPct: Double? = null,
@@ -1550,6 +1551,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         var parsedBatteryV: Double? = null
         var parsedInjMs: Double? = null
         var parsedTiming: String? = null
+        var parsedTimingDeg: Double? = null
         var parsedLoadPct: Double? = null
         var parsedSpeedKmh: Int? = null
         var parsedMixtureAdaptPct: Double? = null
@@ -1606,13 +1608,17 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 FieldKind.ANGLE -> {
                     // В группе 3 поле 3 — угол ДПДЗ (G69), а поле 4 может быть УОЗ!
                     if (group == 3 && itemNum == 4) {
-                        if (parsedTiming == null) parsedTiming = "%.1f°".format(decoded.numeric)
+                        if (parsedTiming == null) {
+                            parsedTiming = "%.1f°".format(decoded.numeric)
+                            parsedTimingDeg = decoded.numeric
+                        }
                     } else if (itemNum == 3 || (group != 3 && parsedThrottle == null)) {
                         parsedThrottle = decoded.numeric
                     }
                 }
                 FieldKind.TIMING -> {
                     parsedTiming = decoded.displayText
+                    parsedTimingDeg = if (b < 127) decoded.numeric else -decoded.numeric
                 }
                 FieldKind.LOAD_PCT -> {
                     if (group == 3 || group == 4) {
@@ -1686,6 +1692,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             intakeAirTemp = parsedAirTemp,
             injectionTimeMs = parsedInjMs,
             ignitionTiming = parsedTiming,
+            ignitionTimingDeg = parsedTimingDeg,
             engineLoadPct = parsedLoadPct,
             vehicleSpeedKmh = parsedSpeedKmh,
             mixtureAdaptationPct = parsedMixtureAdaptPct,
@@ -1904,6 +1911,386 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
 `
   },
   {
+    path: 'app/src/main/java/com/vag/kw1281/OscilloscopeView.kt',
+    filename: 'OscilloscopeView.kt',
+    language: 'kotlin',
+    description: 'Многоканальный осциллограф реального времени для живых датчиков KWP1281',
+    content: `package com.vag.kw1281
+
+import android.content.Context
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.DashPathEffect
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
+import android.util.AttributeSet
+import android.view.View
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+
+/**
+ * Многоканальный автомобильный осциллограф реального времени для VAG KWP1281.
+ * Отображает одновременно произвольный набор датчиков с авто-масштабированием по каждому каналу
+ * и цифровой ступенчатой кривой для концевика ДЗ (F60).
+ */
+class OscilloscopeView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0
+) : View(context, attrs, defStyleAttr) {
+
+    enum class SensorChannel(
+        val label: String,
+        val unit: String,
+        val colorInt: Int,
+        val minSpan: Float,
+        val isDigital: Boolean = false
+    ) {
+        RPM("Обороты", "об/мин", Color.parseColor("#38BDF8"), 1000f),
+        COOLANT("ДТОЖ G62", "°C", Color.parseColor("#F59E0B"), 20f),
+        LAMBDA("Лямбда G39", "", Color.parseColor("#10B981"), 1.0f),
+        THROTTLE("ДПДЗ G69", "°", Color.parseColor("#EC4899"), 15f),
+        BATTERY("АКБ", "В", Color.parseColor("#A78BFA"), 2.0f),
+        INJECTION("Впрыск", "мс", Color.parseColor("#2DD4BF"), 4.0f),
+        AIR_TEMP("ДТВВ G42", "°C", Color.parseColor("#FB923C"), 20f),
+        TIMING("УОЗ", "°", Color.parseColor("#FACC15"), 15f),
+        LOAD("Нагрузка", "%", Color.parseColor("#60A5FA"), 25f),
+        SPEED("Скорость", "км/ч", Color.parseColor("#818CF8"), 40f),
+        ADAPTATION("Адапт.005", "%", Color.parseColor("#A3E635"), 10f),
+        IDLE_SWITCH("Конц. F60", "", Color.parseColor("#34D399"), 1.2f, isDigital = true)
+    }
+
+    data class Sample(
+        val timestampMs: Long,
+        val value: Float
+    )
+
+    private val history = LinkedHashMap<SensorChannel, ArrayList<Sample>>()
+    private var activeChannels: List<SensorChannel> = listOf(SensorChannel.RPM, SensorChannel.LAMBDA)
+    private var timeWindowMs: Long = 30_000L
+    private var isPaused: Boolean = false
+    private var frozenNowMs: Long = System.currentTimeMillis()
+    private var lambdaUnitLabel: String = "В"
+
+    private val density = resources.displayMetrics.density
+
+    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#020617")
+        style = Paint.Style.FILL
+    }
+
+    private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#1E293B")
+        strokeWidth = 1f * density
+        style = Paint.Style.STROKE
+        pathEffect = DashPathEffect(floatArrayOf(4f * density, 4f * density), 0f)
+    }
+
+    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#334155")
+        strokeWidth = 1.2f * density
+        style = Paint.Style.STROKE
+    }
+
+    private val axisTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#64748B")
+        textSize = 10f * density
+        isFakeBoldText = true
+    }
+
+    private val emptyTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#94A3B8")
+        textSize = 12f * density
+        textAlign = Paint.Align.CENTER
+    }
+
+    private val tracePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        strokeWidth = 2.3f * density
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+
+    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+
+    private val legendBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(195, 15, 23, 42)
+        style = Paint.Style.FILL
+    }
+
+    private val legendTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 10.5f * density
+        isFakeBoldText = true
+    }
+
+    private val tracePath = Path()
+    private val legendRect = RectF()
+
+    init {
+        for (ch in SensorChannel.values()) {
+            history[ch] = ArrayList(256)
+        }
+    }
+
+    fun setActiveChannels(channels: Collection<SensorChannel>) {
+        activeChannels = SensorChannel.values().filter { channels.contains(it) }
+        invalidate()
+    }
+
+    fun setLambdaUnitLabel(unit: String) {
+        lambdaUnitLabel = unit
+    }
+
+    fun setPaused(paused: Boolean) {
+        if (paused && !isPaused) {
+            frozenNowMs = System.currentTimeMillis()
+        }
+        isPaused = paused
+        invalidate()
+    }
+
+    fun isPausedState(): Boolean = isPaused
+
+    fun setTimeWindowMs(windowMs: Long) {
+        timeWindowMs = windowMs.coerceIn(10_000L, 120_000L)
+        invalidate()
+    }
+
+    fun getTimeWindowSeconds(): Int = (timeWindowMs / 1000L).toInt()
+
+    fun clearSamples() {
+        for (list in history.values) {
+            list.clear()
+        }
+        frozenNowMs = System.currentTimeMillis()
+        invalidate()
+    }
+
+    fun appendSample(timestampMs: Long, values: Map<SensorChannel, Float>) {
+        val cutoff = timestampMs - 130_000L
+        for ((ch, v) in values) {
+            val list = history[ch] ?: continue
+            list.add(Sample(timestampMs, v))
+            while (list.size > 500 || (list.isNotEmpty() && list[0].timestampMs < cutoff)) {
+                list.removeAt(0)
+            }
+        }
+        if (!isPaused) {
+            invalidate()
+        }
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        if (w <= 0f || h <= 0f) return
+
+        val padLeft = 8f * density
+        val padRight = 10f * density
+        val padTop = 8f * density
+        val padBottom = 18f * density
+
+        canvas.drawRect(0f, 0f, w, h, bgPaint)
+
+        val plotLeft = padLeft
+        val plotRight = w - padRight
+        val plotTop = padTop
+        val plotBottom = h - padBottom
+        val plotW = max(1f, plotRight - plotLeft)
+        val plotH = max(1f, plotBottom - plotTop)
+
+        // Горизонтальные линии сетки (4 деления)
+        for (i in 0..4) {
+            val y = plotTop + (plotH * i / 4f)
+            canvas.drawLine(plotLeft, y, plotRight, y, gridPaint)
+        }
+
+        // Вертикальные линии сетки времени (6 делений)
+        val secsTotal = (timeWindowMs / 1000L).toInt()
+        for (i in 0..6) {
+            val x = plotLeft + (plotW * i / 6f)
+            canvas.drawLine(x, plotTop, x, plotBottom, gridPaint)
+            if (i % 2 == 0) {
+                val secOffset = -((secsTotal * (6 - i)) / 6)
+                val label = if (secOffset == 0) "0с" else "\${secOffset}с"
+                axisTextPaint.textAlign = when (i) {
+                    0 -> Paint.Align.LEFT
+                    6 -> Paint.Align.RIGHT
+                    else -> Paint.Align.CENTER
+                }
+                canvas.drawText(label, x, h - 4f * density, axisTextPaint)
+            }
+        }
+
+        canvas.drawRect(plotLeft, plotTop, plotRight, plotBottom, borderPaint)
+
+        if (activeChannels.isEmpty()) {
+            val centerY = plotTop + plotH / 2f - 6f * density
+            canvas.drawText(
+                "Нажмите на карточку датчика ниже,",
+                w / 2f,
+                centerY,
+                emptyTextPaint
+            )
+            canvas.drawText(
+                "чтобы добавить его на осциллограмму",
+                w / 2f,
+                centerY + 18f * density,
+                emptyTextPaint
+            )
+            return
+        }
+
+        val endTime = if (isPaused) frozenNowMs else System.currentTimeMillis()
+        val startTime = endTime - timeWindowMs
+
+        // Отрисовка кривых и расчёт легенды
+        val legendEntries = ArrayList<Pair<Int, String>>(activeChannels.size)
+
+        for (ch in activeChannels) {
+            val list = history[ch] ?: continue
+            val visible = list.filter { it.timestampMs >= startTime - 5_000L && it.timestampMs <= endTime }
+            if (visible.isEmpty()) {
+                legendEntries.add(ch.colorInt to "\${ch.label}: ---")
+                continue
+            }
+
+            var obsMin = Float.MAX_VALUE
+            var obsMax = -Float.MAX_VALUE
+            for (s in visible) {
+                if (s.value < obsMin) obsMin = s.value
+                if (s.value > obsMax) obsMax = s.value
+            }
+
+            val yMin: Float
+            val yMax: Float
+            if (ch.isDigital) {
+                yMin = -0.15f
+                yMax = 1.25f
+            } else {
+                val effectiveMinSpan = if (ch == SensorChannel.LAMBDA && abs(obsMax - obsMin) > 2.5f) {
+                    20f
+                } else {
+                    ch.minSpan
+                }
+                val rawSpan = obsMax - obsMin
+                val span = max(rawSpan * 1.18f, effectiveMinSpan)
+                val mid = (obsMin + obsMax) / 2f
+                yMin = mid - span / 2f
+                yMax = mid + span / 2f
+            }
+            val ySpan = max(0.0001f, yMax - yMin)
+
+            tracePath.reset()
+            var lastX = 0f
+            var lastY = 0f
+            var started = false
+
+            for (s in visible) {
+                val normX = ((s.timestampMs - startTime).toFloat() / timeWindowMs.toFloat()).coerceIn(0f, 1f)
+                val x = plotLeft + normX * plotW
+                val normY = ((s.value - yMin) / ySpan).coerceIn(0f, 1f)
+                val y = plotBottom - normY * plotH
+
+                if (!started) {
+                    tracePath.moveTo(x, y)
+                    started = true
+                } else {
+                    if (ch.isDigital) {
+                        // Прямоугольный фронт для дискретного сигнала концевика F60
+                        tracePath.lineTo(x, lastY)
+                    }
+                    tracePath.lineTo(x, y)
+                }
+                lastX = x
+                lastY = y
+            }
+
+            tracePaint.color = ch.colorInt
+            canvas.drawPath(tracePath, tracePaint)
+
+            if (started) {
+                dotPaint.color = ch.colorInt
+                canvas.drawCircle(lastX, lastY, 3.6f * density, dotPaint)
+            }
+
+            val latest = visible.last().value
+            val legendText = formatLegendValue(ch, latest, obsMin, obsMax)
+            legendEntries.add(ch.colorInt to legendText)
+        }
+
+        // Компактная легенда в левом верхнем углу экрана осциллографа
+        val rowH = 15f * density
+        val maxRows = min(legendEntries.size, 6)
+        var maxTextW = 0f
+        for (i in 0 until maxRows) {
+            val tw = legendTextPaint.measureText(legendEntries[i].second)
+            if (tw > maxTextW) maxTextW = tw
+        }
+        val boxPadX = 6f * density
+        val boxPadY = 4f * density
+        val boxRight = min(plotRight - 4f * density, plotLeft + 18f * density + maxTextW + boxPadX * 2f)
+        val boxBottom = min(plotBottom - 4f * density, plotTop + 4f * density + maxRows * rowH + boxPadY * 2f)
+        legendRect.set(plotLeft + 4f * density, plotTop + 4f * density, boxRight, boxBottom)
+        canvas.drawRoundRect(legendRect, 6f * density, 6f * density, legendBgPaint)
+
+        for (i in 0 until maxRows) {
+            val (c, txt) = legendEntries[i]
+            val cy = legendRect.top + boxPadY + (i + 0.65f) * rowH
+            dotPaint.color = c
+            canvas.drawCircle(legendRect.left + boxPadX + 3f * density, cy - 3f * density, 3.2f * density, dotPaint)
+            legendTextPaint.color = c
+            canvas.drawText(txt, legendRect.left + boxPadX + 10f * density, cy, legendTextPaint)
+        }
+        if (legendEntries.size > maxRows) {
+            // При >6 каналах показываем счётчик оставшихся
+            legendTextPaint.color = Color.parseColor("#94A3B8")
+            canvas.drawText(
+                "+ ещё \${legendEntries.size - maxRows}",
+                legendRect.right - 46f * density,
+                legendRect.bottom - 4f * density,
+                legendTextPaint
+            )
+        }
+    }
+
+    private fun formatLegendValue(
+        ch: SensorChannel,
+        latest: Float,
+        obsMin: Float,
+        obsMax: Float
+    ): String {
+        return when (ch) {
+            SensorChannel.RPM -> "\${ch.label}: \${latest.toInt()} [\${obsMin.toInt()}..\${obsMax.toInt()}]"
+            SensorChannel.COOLANT,
+            SensorChannel.AIR_TEMP,
+            SensorChannel.SPEED -> "\${ch.label}: \${latest.toInt()} \${ch.unit}"
+            SensorChannel.IDLE_SWITCH -> {
+                val st = if (latest >= 0.5f) "ЗАМКН.(ХХ)" else "РАЗОМКН."
+                "\${ch.label}: $st"
+            }
+            SensorChannel.LAMBDA -> {
+                val u = lambdaUnitLabel
+                if (abs(obsMax - obsMin) <= 2.5f && abs(latest) <= 2.5f) {
+                    "\${ch.label}: %.2f $u [%.2f..%.2f]".format(latest, obsMin, obsMax)
+                } else {
+                    "\${ch.label}: %.1f%% [%.0f..%.0f]".format(latest, obsMin, obsMax)
+                }
+            }
+            SensorChannel.BATTERY,
+            SensorChannel.INJECTION -> "\${ch.label}: %.2f \${ch.unit} [%.2f..%.2f]".format(latest, obsMin, obsMax)
+            else -> "\${ch.label}: %.1f \${ch.unit} [%.1f..%.1f]".format(latest, obsMin, obsMax)
+        }
+    }
+}
+`
+  },
+  {
     path: 'app/src/main/res/layout/activity_main.xml',
     filename: 'activity_main.xml',
     language: 'xml',
@@ -2031,422 +2418,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             android:layout_marginTop="2dp" />
     </LinearLayout>
 
-    <!-- Live Gauges Dashboard (for Engine) -->
-    <LinearLayout
-        android:id="@+id/layoutLiveData"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:background="#0F172A"
-        android:paddingStart="8dp"
-        android:paddingEnd="8dp"
-        android:paddingTop="6dp"
-        android:paddingBottom="6dp"
-        android:layout_marginBottom="6dp">
-
-        <!-- Row 1: Primary Sensors -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <!-- RPM -->
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="center">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="ОБОРОТЫ"
-                    android:textColor="#64748B"
-                    android:textSize="9sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tvGaugeRpm"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="---"
-                    android:textColor="#38BDF8"
-                    android:textSize="16sp"
-                    android:textStyle="bold"
-                    android:typeface="monospace" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="об/мин"
-                    android:textColor="#94A3B8"
-                    android:textSize="9sp" />
-            </LinearLayout>
-
-            <!-- Coolant Temp -->
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="center">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="ДТОЖ G62"
-                    android:textColor="#64748B"
-                    android:textSize="9sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tvGaugeTemp"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="---"
-                    android:textColor="#F59E0B"
-                    android:textSize="16sp"
-                    android:textStyle="bold"
-                    android:typeface="monospace" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="°C"
-                    android:textColor="#94A3B8"
-                    android:textSize="9sp" />
-            </LinearLayout>
-
-            <!-- Lambda O2 -->
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="center">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="ЛЯМБДА G39"
-                    android:textColor="#64748B"
-                    android:textSize="9sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tvGaugeLambda"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="---"
-                    android:textColor="#10B981"
-                    android:textSize="16sp"
-                    android:textStyle="bold"
-                    android:typeface="monospace" />
-
-                <TextView
-                    android:id="@+id/tvGaugeLambdaUnit"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Вольт"
-                    android:textColor="#94A3B8"
-                    android:textSize="9sp" />
-            </LinearLayout>
-
-            <!-- Throttle Angle / TPS -->
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="center">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="ДПДЗ G69"
-                    android:textColor="#64748B"
-                    android:textSize="9sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tvGaugeThrottle"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="---"
-                    android:textColor="#EC4899"
-                    android:textSize="16sp"
-                    android:textStyle="bold"
-                    android:typeface="monospace" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="угол °"
-                    android:textColor="#94A3B8"
-                    android:textSize="9sp" />
-            </LinearLayout>
-        </LinearLayout>
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="#1E293B"
-            android:layout_marginTop="4dp"
-            android:layout_marginBottom="4dp" />
-
-        <!-- Row 2: Secondary Sensors (Battery, Injection Time, Intake Air Temp, Ignition Timing) -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <!-- Battery Voltage -->
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="center">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="АКБ"
-                    android:textColor="#64748B"
-                    android:textSize="9sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tvGaugeBattery"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="---"
-                    android:textColor="#A78BFA"
-                    android:textSize="14sp"
-                    android:textStyle="bold"
-                    android:typeface="monospace" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Вольт"
-                    android:textColor="#94A3B8"
-                    android:textSize="9sp" />
-            </LinearLayout>
-
-            <!-- Injection Time -->
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="center">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="ВПРЫСК"
-                    android:textColor="#64748B"
-                    android:textSize="9sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tvGaugeInj"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="---"
-                    android:textColor="#2DD4BF"
-                    android:textSize="14sp"
-                    android:textStyle="bold"
-                    android:typeface="monospace" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="мс"
-                    android:textColor="#94A3B8"
-                    android:textSize="9sp" />
-            </LinearLayout>
-
-            <!-- Intake Air Temp G42 -->
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="center">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="ДТВВ G42"
-                    android:textColor="#64748B"
-                    android:textSize="9sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tvGaugeAirTemp"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="---"
-                    android:textColor="#FB923C"
-                    android:textSize="14sp"
-                    android:textStyle="bold"
-                    android:typeface="monospace" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="°C"
-                    android:textColor="#94A3B8"
-                    android:textSize="9sp" />
-            </LinearLayout>
-
-            <!-- Ignition Timing -->
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:gravity="center">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="УОЗ"
-                    android:textColor="#64748B"
-                    android:textSize="9sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tvGaugeTiming"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="---"
-                    android:textColor="#FACC15"
-                    android:textSize="13sp"
-                    android:textStyle="bold"
-                    android:typeface="monospace" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="зажигание"
-                    android:textColor="#94A3B8"
-                    android:textSize="9sp" />
-            </LinearLayout>
-        </LinearLayout>
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="#1E293B"
-            android:layout_marginTop="4dp"
-            android:layout_marginBottom="4dp" />
-
-        <!-- Row 3: Load, Speed, Adaptation -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="horizontal"
-                android:gravity="center">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="НАГР: "
-                    android:textColor="#64748B"
-                    android:textSize="10sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tvGaugeLoad"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="---"
-                    android:textColor="#E2E8F0"
-                    android:textSize="12sp"
-                    android:textStyle="bold"
-                    android:typeface="monospace" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="horizontal"
-                android:gravity="center">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="СКОР: "
-                    android:textColor="#64748B"
-                    android:textSize="10sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tvGaugeSpeed"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="---"
-                    android:textColor="#E2E8F0"
-                    android:textSize="12sp"
-                    android:textStyle="bold"
-                    android:typeface="monospace" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="horizontal"
-                android:gravity="center">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="АДАПТ: "
-                    android:textColor="#64748B"
-                    android:textSize="10sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tvGaugeAdapt"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="---"
-                    android:textColor="#E2E8F0"
-                    android:textSize="12sp"
-                    android:textStyle="bold"
-                    android:typeface="monospace" />
-            </LinearLayout>
-        </LinearLayout>
-
-        <!-- Row 4: Throttle Idle Switch (F60) & Operating Mode Bar -->
-        <TextView
-            android:id="@+id/tvGaugeIdleSwitch"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:background="#1E293B"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            android:paddingTop="4dp"
-            android:paddingBottom="4dp"
-            android:text="Концевик ДЗ (F60): ---  •  Режим: ---"
-            android:textColor="#94A3B8"
-            android:textSize="11sp"
-            android:textStyle="bold"
-            android:gravity="center" />
-    </LinearLayout>
+    <!-- Live measurements & oscilloscope open in dedicated dialog_measuring window -->
 
     <!-- Immobilizer Status Card (visible when Immo tab selected) -->
     <LinearLayout
@@ -2872,12 +2844,932 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
 `
   },
   {
+    path: 'app/src/main/res/layout/dialog_measuring.xml',
+    filename: 'dialog_measuring.xml',
+    language: 'xml',
+    description: 'Отдельное окно измерений датчиков с интерактивным осциллографом',
+    content: `<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#090D16">
+
+    <!-- Top Window Bar -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#0F172A"
+        android:paddingStart="12dp"
+        android:paddingEnd="10dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ИЗМЕРЕНИЯ ЭБУ (08)"
+                android:textColor="#38BDF8"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:typeface="monospace" />
+
+            <TextView
+                android:id="@+id/tvMeasStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Подготовка опроса датчиков..."
+                android:textColor="#94A3B8"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btnToggleScope"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:layout_marginEnd="6dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:text="ГРАФИКИ"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:backgroundTint="#0284C7"
+            android:textColor="#FFFFFF" />
+
+        <Button
+            android:id="@+id/btnCloseMeas"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:text="ЗАКРЫТЬ"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:backgroundTint="#DC2626"
+            android:textColor="#FFFFFF" />
+    </LinearLayout>
+
+    <!-- Oscilloscope Window Panel (toggleable) -->
+    <LinearLayout
+        android:id="@+id/layoutOscilloscopePanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#0B1120"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="4dp">
+
+            <TextView
+                android:id="@+id/tvScopeCount"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="ОСЦИЛЛОГРАММА (2 кан.)"
+                android:textColor="#E2E8F0"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnScopeWindow"
+                android:layout_width="wrap_content"
+                android:layout_height="34dp"
+                android:minWidth="0dp"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:layout_marginEnd="4dp"
+                android:text="30с"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:backgroundTint="#1E293B"
+                android:textColor="#38BDF8" />
+
+            <Button
+                android:id="@+id/btnScopePause"
+                android:layout_width="wrap_content"
+                android:layout_height="34dp"
+                android:minWidth="0dp"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:layout_marginEnd="4dp"
+                android:text="ПАУЗА"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:backgroundTint="#334155"
+                android:textColor="#FFFFFF" />
+
+            <Button
+                android:id="@+id/btnScopeClear"
+                android:layout_width="wrap_content"
+                android:layout_height="34dp"
+                android:minWidth="0dp"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:text="СБРОС"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:backgroundTint="#334155"
+                android:textColor="#CBD5E1" />
+        </LinearLayout>
+
+        <com.vag.kw1281.OscilloscopeView
+            android:id="@+id/oscilloscopeView"
+            android:layout_width="match_parent"
+            android:layout_height="210dp" />
+    </LinearLayout>
+
+    <!-- Instruction Strip -->
+    <TextView
+        android:id="@+id/tvMeasHint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#172554"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:paddingTop="5dp"
+        android:paddingBottom="5dp"
+        android:text="Нажмите на любой датчик ниже, чтобы добавить или убрать его с осциллограммы"
+        android:textColor="#93C5FD"
+        android:textSize="11sp"
+        android:gravity="center" />
+
+    <!-- Scrollable Tappable Sensor Cards Grid -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:padding="8dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- Row 1: RPM + Coolant Temp -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="6dp">
+
+                <LinearLayout
+                    android:id="@+id/cardRpm"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="3dp"
+                    android:orientation="vertical"
+                    android:background="#1E293B"
+                    android:padding="10dp"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="ОБОРОТЫ (G40)"
+                            android:textColor="#94A3B8"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvBadgeRpm"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="НА ГРАФИКЕ"
+                            android:textColor="#38BDF8"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvMeasRpm"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="---"
+                        android:textColor="#38BDF8"
+                        android:textSize="22sp"
+                        android:textStyle="bold"
+                        android:typeface="monospace"
+                        android:layout_marginTop="2dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="об/мин"
+                        android:textColor="#64748B"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/cardTemp"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="3dp"
+                    android:orientation="vertical"
+                    android:background="#1E293B"
+                    android:padding="10dp"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="ДТОЖ (G62)"
+                            android:textColor="#94A3B8"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvBadgeTemp"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="+ график"
+                            android:textColor="#64748B"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvMeasTemp"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="---"
+                        android:textColor="#F59E0B"
+                        android:textSize="22sp"
+                        android:textStyle="bold"
+                        android:typeface="monospace"
+                        android:layout_marginTop="2dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="°C охлажд. жидк."
+                        android:textColor="#64748B"
+                        android:textSize="10sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Row 2: Lambda + Throttle Angle -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="6dp">
+
+                <LinearLayout
+                    android:id="@+id/cardLambda"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="3dp"
+                    android:orientation="vertical"
+                    android:background="#1E293B"
+                    android:padding="10dp"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="ЛЯМБДА (G39)"
+                            android:textColor="#94A3B8"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvBadgeLambda"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="НА ГРАФИКЕ"
+                            android:textColor="#10B981"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvMeasLambda"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="---"
+                        android:textColor="#10B981"
+                        android:textSize="22sp"
+                        android:textStyle="bold"
+                        android:typeface="monospace"
+                        android:layout_marginTop="2dp" />
+
+                    <TextView
+                        android:id="@+id/tvMeasLambdaUnit"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Вольт"
+                        android:textColor="#64748B"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/cardThrottle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="3dp"
+                    android:orientation="vertical"
+                    android:background="#1E293B"
+                    android:padding="10dp"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="ДПДЗ (G69)"
+                            android:textColor="#94A3B8"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvBadgeThrottle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="+ график"
+                            android:textColor="#64748B"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvMeasThrottle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="---"
+                        android:textColor="#EC4899"
+                        android:textSize="22sp"
+                        android:textStyle="bold"
+                        android:typeface="monospace"
+                        android:layout_marginTop="2dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="угол дросселя °"
+                        android:textColor="#64748B"
+                        android:textSize="10sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Row 3: Battery + Injection Time -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="6dp">
+
+                <LinearLayout
+                    android:id="@+id/cardBattery"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="3dp"
+                    android:orientation="vertical"
+                    android:background="#1E293B"
+                    android:padding="10dp"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="НАПРЯЖЕНИЕ АКБ"
+                            android:textColor="#94A3B8"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvBadgeBattery"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="+ график"
+                            android:textColor="#64748B"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvMeasBattery"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="---"
+                        android:textColor="#A78BFA"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:typeface="monospace"
+                        android:layout_marginTop="2dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Вольт (бортовая сеть)"
+                        android:textColor="#64748B"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/cardInj"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="3dp"
+                    android:orientation="vertical"
+                    android:background="#1E293B"
+                    android:padding="10dp"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="ВПРЫСК (N30)"
+                            android:textColor="#94A3B8"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvBadgeInj"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="+ график"
+                            android:textColor="#64748B"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvMeasInj"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="---"
+                        android:textColor="#2DD4BF"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:typeface="monospace"
+                        android:layout_marginTop="2dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="мс длительность"
+                        android:textColor="#64748B"
+                        android:textSize="10sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Row 4: Air Temp G42 + Ignition Timing -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="6dp">
+
+                <LinearLayout
+                    android:id="@+id/cardAirTemp"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="3dp"
+                    android:orientation="vertical"
+                    android:background="#1E293B"
+                    android:padding="10dp"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="ДТВВ (G42)"
+                            android:textColor="#94A3B8"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvBadgeAirTemp"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="+ график"
+                            android:textColor="#64748B"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvMeasAirTemp"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="---"
+                        android:textColor="#FB923C"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:typeface="monospace"
+                        android:layout_marginTop="2dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="°C воздух на впуске"
+                        android:textColor="#64748B"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/cardTiming"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="3dp"
+                    android:orientation="vertical"
+                    android:background="#1E293B"
+                    android:padding="10dp"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="УОЗ ЗАЖИГАНИЯ"
+                            android:textColor="#94A3B8"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvBadgeTiming"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="+ график"
+                            android:textColor="#64748B"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvMeasTiming"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="---"
+                        android:textColor="#FACC15"
+                        android:textSize="18sp"
+                        android:textStyle="bold"
+                        android:typeface="monospace"
+                        android:layout_marginTop="2dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="угол опережения °"
+                        android:textColor="#64748B"
+                        android:textSize="10sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Row 5: Engine Load + Vehicle Speed -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="6dp">
+
+                <LinearLayout
+                    android:id="@+id/cardLoad"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="3dp"
+                    android:orientation="vertical"
+                    android:background="#1E293B"
+                    android:padding="10dp"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="НАГРУЗКА"
+                            android:textColor="#94A3B8"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvBadgeLoad"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="+ график"
+                            android:textColor="#64748B"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvMeasLoad"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="---"
+                        android:textColor="#60A5FA"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:typeface="monospace"
+                        android:layout_marginTop="2dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="% расчётная"
+                        android:textColor="#64748B"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/cardSpeed"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="3dp"
+                    android:orientation="vertical"
+                    android:background="#1E293B"
+                    android:padding="10dp"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="СКОРОСТЬ (G68)"
+                            android:textColor="#94A3B8"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvBadgeSpeed"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="+ график"
+                            android:textColor="#64748B"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvMeasSpeed"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="---"
+                        android:textColor="#818CF8"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:typeface="monospace"
+                        android:layout_marginTop="2dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="км/ч"
+                        android:textColor="#64748B"
+                        android:textSize="10sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Row 6: Adaptation + F60 Idle Switch -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="8dp">
+
+                <LinearLayout
+                    android:id="@+id/cardAdapt"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="3dp"
+                    android:orientation="vertical"
+                    android:background="#1E293B"
+                    android:padding="10dp"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="АДАПТАЦИЯ (Гр.005)"
+                            android:textColor="#94A3B8"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvBadgeAdapt"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="+ график"
+                            android:textColor="#64748B"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvMeasAdapt"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="---"
+                        android:textColor="#A3E635"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:typeface="monospace"
+                        android:layout_marginTop="2dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="% коррекция смеси"
+                        android:textColor="#64748B"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/cardIdleSwitch"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="3dp"
+                    android:orientation="vertical"
+                    android:background="#1E293B"
+                    android:padding="10dp"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="КОНЦЕВИК ДЗ (F60)"
+                            android:textColor="#94A3B8"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvBadgeIdleSwitch"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="+ график"
+                            android:textColor="#64748B"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvMeasIdleSwitch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="---"
+                        android:textColor="#34D399"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:typeface="monospace"
+                        android:layout_marginTop="4dp" />
+
+                    <TextView
+                        android:id="@+id/tvMeasMode"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Режим: ---"
+                        android:textColor="#64748B"
+                        android:textSize="10sp"
+                        android:layout_marginTop="2dp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Raw Groups / Debug Details -->
+            <TextView
+                android:id="@+id/tvMeasRawGroups"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#020617"
+                android:padding="10dp"
+                android:text="Ожидание первых данных от ЭБУ..."
+                android:textColor="#CBD5E1"
+                android:textSize="11sp"
+                android:typeface="monospace"
+                android:lineSpacingExtra="2dp" />
+        </LinearLayout>
+    </ScrollView>
+
+</LinearLayout>
+`
+  },
+  {
     path: 'app/src/main/java/com/vag/kw1281/MainActivity.kt',
     filename: 'MainActivity.kt',
     language: 'kotlin',
     description: 'Главный экран Android-приложения с фиксированной скоростью 9600 бод и защитой от сбоев',
     content: `package com.vag.kw1281
 
+import android.app.Dialog
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.ClipData
@@ -2887,11 +3779,14 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
 import android.view.View
+import android.view.Window
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -2900,6 +3795,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.vag.kw1281.OscilloscopeView.SensorChannel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -2922,21 +3818,53 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTabImmo: Button
     private var selectedEcuAddress: Int = 0x01 // 0x01 = Двигатель, 0x25 = Иммобилайзер
 
-    // Панели живых параметров (Engine)
-    private lateinit var layoutLiveData: LinearLayout
-    private lateinit var tvGaugeRpm: TextView
-    private lateinit var tvGaugeTemp: TextView
-    private lateinit var tvGaugeLambda: TextView
-    private lateinit var tvGaugeLambdaUnit: TextView
-    private lateinit var tvGaugeThrottle: TextView
-    private lateinit var tvGaugeBattery: TextView
-    private lateinit var tvGaugeInj: TextView
-    private lateinit var tvGaugeAirTemp: TextView
-    private lateinit var tvGaugeTiming: TextView
-    private lateinit var tvGaugeLoad: TextView
-    private lateinit var tvGaugeSpeed: TextView
-    private lateinit var tvGaugeAdapt: TextView
-    private lateinit var tvGaugeIdleSwitch: TextView
+    // Отдельное окно измерений и осциллограф
+    private var measuringDialog: Dialog? = null
+    private val selectedScopeChannels = linkedSetOf(SensorChannel.RPM, SensorChannel.LAMBDA)
+    private var isScopePanelVisible: Boolean = true
+
+    private class MeasuringWindowViews(dialog: Dialog) {
+        val tvStatus: TextView = dialog.findViewById(R.id.tvMeasStatus)
+        val btnToggleScope: Button = dialog.findViewById(R.id.btnToggleScope)
+        val btnClose: Button = dialog.findViewById(R.id.btnCloseMeas)
+        val layoutScopePanel: LinearLayout = dialog.findViewById(R.id.layoutOscilloscopePanel)
+        val tvScopeCount: TextView = dialog.findViewById(R.id.tvScopeCount)
+        val btnScopeWindow: Button = dialog.findViewById(R.id.btnScopeWindow)
+        val btnScopePause: Button = dialog.findViewById(R.id.btnScopePause)
+        val btnScopeClear: Button = dialog.findViewById(R.id.btnScopeClear)
+        val scopeView: OscilloscopeView = dialog.findViewById(R.id.oscilloscopeView)
+
+        val tvRpm: TextView = dialog.findViewById(R.id.tvMeasRpm)
+        val tvTemp: TextView = dialog.findViewById(R.id.tvMeasTemp)
+        val tvLambda: TextView = dialog.findViewById(R.id.tvMeasLambda)
+        val tvLambdaUnit: TextView = dialog.findViewById(R.id.tvMeasLambdaUnit)
+        val tvThrottle: TextView = dialog.findViewById(R.id.tvMeasThrottle)
+        val tvBattery: TextView = dialog.findViewById(R.id.tvMeasBattery)
+        val tvInj: TextView = dialog.findViewById(R.id.tvMeasInj)
+        val tvAirTemp: TextView = dialog.findViewById(R.id.tvMeasAirTemp)
+        val tvTiming: TextView = dialog.findViewById(R.id.tvMeasTiming)
+        val tvLoad: TextView = dialog.findViewById(R.id.tvMeasLoad)
+        val tvSpeed: TextView = dialog.findViewById(R.id.tvMeasSpeed)
+        val tvAdapt: TextView = dialog.findViewById(R.id.tvMeasAdapt)
+        val tvIdleSwitch: TextView = dialog.findViewById(R.id.tvMeasIdleSwitch)
+        val tvMode: TextView = dialog.findViewById(R.id.tvMeasMode)
+        val tvRawGroups: TextView = dialog.findViewById(R.id.tvMeasRawGroups)
+
+        val channelCards: Map<SensorChannel, Pair<LinearLayout, TextView>> = mapOf(
+            SensorChannel.RPM to (dialog.findViewById<LinearLayout>(R.id.cardRpm) to dialog.findViewById<TextView>(R.id.tvBadgeRpm)),
+            SensorChannel.COOLANT to (dialog.findViewById<LinearLayout>(R.id.cardTemp) to dialog.findViewById<TextView>(R.id.tvBadgeTemp)),
+            SensorChannel.LAMBDA to (dialog.findViewById<LinearLayout>(R.id.cardLambda) to dialog.findViewById<TextView>(R.id.tvBadgeLambda)),
+            SensorChannel.THROTTLE to (dialog.findViewById<LinearLayout>(R.id.cardThrottle) to dialog.findViewById<TextView>(R.id.tvBadgeThrottle)),
+            SensorChannel.BATTERY to (dialog.findViewById<LinearLayout>(R.id.cardBattery) to dialog.findViewById<TextView>(R.id.tvBadgeBattery)),
+            SensorChannel.INJECTION to (dialog.findViewById<LinearLayout>(R.id.cardInj) to dialog.findViewById<TextView>(R.id.tvBadgeInj)),
+            SensorChannel.AIR_TEMP to (dialog.findViewById<LinearLayout>(R.id.cardAirTemp) to dialog.findViewById<TextView>(R.id.tvBadgeAirTemp)),
+            SensorChannel.TIMING to (dialog.findViewById<LinearLayout>(R.id.cardTiming) to dialog.findViewById<TextView>(R.id.tvBadgeTiming)),
+            SensorChannel.LOAD to (dialog.findViewById<LinearLayout>(R.id.cardLoad) to dialog.findViewById<TextView>(R.id.tvBadgeLoad)),
+            SensorChannel.SPEED to (dialog.findViewById<LinearLayout>(R.id.cardSpeed) to dialog.findViewById<TextView>(R.id.tvBadgeSpeed)),
+            SensorChannel.ADAPTATION to (dialog.findViewById<LinearLayout>(R.id.cardAdapt) to dialog.findViewById<TextView>(R.id.tvBadgeAdapt)),
+            SensorChannel.IDLE_SWITCH to (dialog.findViewById<LinearLayout>(R.id.cardIdleSwitch) to dialog.findViewById<TextView>(R.id.tvBadgeIdleSwitch))
+        )
+    }
 
     // Панель иммобилайзера (Immo)
     private lateinit var layoutImmoStatus: LinearLayout
@@ -3041,21 +3969,6 @@ class MainActivity : AppCompatActivity() {
             btnTabEngine = findViewById(R.id.btnTabEngine)
             btnTabImmo = findViewById(R.id.btnTabImmo)
 
-            layoutLiveData = findViewById(R.id.layoutLiveData)
-            tvGaugeRpm = findViewById(R.id.tvGaugeRpm)
-            tvGaugeTemp = findViewById(R.id.tvGaugeTemp)
-            tvGaugeLambda = findViewById(R.id.tvGaugeLambda)
-            tvGaugeLambdaUnit = findViewById(R.id.tvGaugeLambdaUnit)
-            tvGaugeThrottle = findViewById(R.id.tvGaugeThrottle)
-            tvGaugeBattery = findViewById(R.id.tvGaugeBattery)
-            tvGaugeInj = findViewById(R.id.tvGaugeInj)
-            tvGaugeAirTemp = findViewById(R.id.tvGaugeAirTemp)
-            tvGaugeTiming = findViewById(R.id.tvGaugeTiming)
-            tvGaugeLoad = findViewById(R.id.tvGaugeLoad)
-            tvGaugeSpeed = findViewById(R.id.tvGaugeSpeed)
-            tvGaugeAdapt = findViewById(R.id.tvGaugeAdapt)
-            tvGaugeIdleSwitch = findViewById(R.id.tvGaugeIdleSwitch)
-
             layoutImmoStatus = findViewById(R.id.layoutImmoStatus)
             tvImmoKeyStatus = findViewById(R.id.tvImmoKeyStatus)
             tvImmoStartStatus = findViewById(R.id.tvImmoStartStatus)
@@ -3148,7 +4061,6 @@ class MainActivity : AppCompatActivity() {
             updateConnectButtonState(connected = false)
         }
         selectedEcuAddress = addr
-        resetGauges()
 
         if (addr == 0x01) {
             btnTabEngine.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0284C7"))
@@ -3157,7 +4069,6 @@ class MainActivity : AppCompatActivity() {
             btnTabImmo.setTextColor(Color.parseColor("#94A3B8"))
 
             tvDeviceInfo.text = "Блок: Bosch Mono-Motronic 1.2.3 (3A0 907 311)"
-            layoutLiveData.visibility = View.VISIBLE
             layoutImmoStatus.visibility = View.GONE
             rowEngineDiagnostics.visibility = View.VISIBLE
             btnMeasuring.visibility = View.VISIBLE
@@ -3174,7 +4085,6 @@ class MainActivity : AppCompatActivity() {
             btnTabEngine.setTextColor(Color.parseColor("#94A3B8"))
 
             tvDeviceInfo.text = "Блок: Иммобилайзер Wegfahrsicherung (1H0 953 257)"
-            layoutLiveData.visibility = View.GONE
             layoutImmoStatus.visibility = View.VISIBLE
             tvImmoKeyStatus.text = "• Транспондер ключа: Ожидание опроса..."
             tvImmoStartStatus.text = "• Разрешение пуска двигателя: Не проверено"
@@ -3188,23 +4098,6 @@ class MainActivity : AppCompatActivity() {
             btnAdaptationOpen.visibility = View.VISIBLE
             tvAdaptHint.text = "Канал 00: привязка ЭБУ к иммобилайзеру (Сохранить 0) • Канал 01: кол-во ключей"
         }
-    }
-
-    private fun resetGauges() {
-        tvGaugeRpm.text = "---"
-        tvGaugeTemp.text = "---"
-        tvGaugeLambda.text = "---"
-        tvGaugeLambdaUnit.text = "Вольт"
-        tvGaugeThrottle.text = "---"
-        tvGaugeBattery.text = "---"
-        tvGaugeInj.text = "---"
-        tvGaugeAirTemp.text = "---"
-        tvGaugeTiming.text = "---"
-        tvGaugeLoad.text = "---"
-        tvGaugeSpeed.text = "---"
-        tvGaugeAdapt.text = "---"
-        tvGaugeIdleSwitch.text = "Концевик ДЗ (F60): ---  •  Режим: ---"
-        tvGaugeIdleSwitch.setTextColor(Color.parseColor("#94A3B8"))
     }
 
     private fun setResultText(msg: String) {
@@ -3332,7 +4225,6 @@ class MainActivity : AppCompatActivity() {
                 layoutAdaptation.visibility = View.GONE
                 btnConnectEcu.isEnabled = false
                 setDiagnosticButtonsEnabled(false)
-                resetGauges()
 
                 val blockName = if (selectedEcuAddress == 0x25) "Иммобилайзера (0x25)" else "ЭБУ Двигателя (0x01)"
                 tvStatus.text = "Инициализация $blockName..."
@@ -3494,9 +4386,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleLiveMeasuring() {
-        if (liveStreamJob != null) {
+        if (measuringDialog?.isShowing == true || liveStreamJob != null) {
             stopLiveStream()
-            setResultText("Поток живых измерений остановлен.")
+            setResultText("Окно измерений закрыто. Связь с ЭБУ активна.")
             return
         }
 
@@ -3507,9 +4399,83 @@ class MainActivity : AppCompatActivity() {
 
         stopBasicSettingsStream()
         layoutActuatorTest.visibility = View.GONE
-        btnMeasuring.text = "СТОП (08)"
+        layoutAdaptation.visibility = View.GONE
+
+        val dialog = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dialog.setContentView(R.layout.dialog_measuring)
+        dialog.window?.setLayout(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT
+        )
+        measuringDialog = dialog
+
+        val views = MeasuringWindowViews(dialog)
+        views.scopeView.setActiveChannels(selectedScopeChannels)
+        updateScopeHeaderAndCards(views)
+
+        views.btnToggleScope.setOnClickListener {
+            isScopePanelVisible = !isScopePanelVisible
+            updateScopeHeaderAndCards(views)
+        }
+
+        views.btnScopeWindow.setOnClickListener {
+            val nextWindow = when (views.scopeView.getTimeWindowSeconds()) {
+                15 -> 30_000L
+                30 -> 60_000L
+                else -> 15_000L
+            }
+            views.scopeView.setTimeWindowMs(nextWindow)
+            views.btnScopeWindow.text = "\${nextWindow / 1000L}с"
+        }
+
+        views.btnScopePause.setOnClickListener {
+            val paused = !views.scopeView.isPausedState()
+            views.scopeView.setPaused(paused)
+            views.btnScopePause.text = if (paused) "ПУСК" else "ПАУЗА"
+            views.btnScopePause.backgroundTintList = ColorStateList.valueOf(
+                Color.parseColor(if (paused) "#D97706" else "#334155")
+            )
+        }
+
+        views.btnScopeClear.setOnClickListener {
+            views.scopeView.clearSamples()
+        }
+
+        for ((channel, pair) in views.channelCards) {
+            val (card, _) = pair
+            card.setOnClickListener {
+                if (selectedScopeChannels.contains(channel)) {
+                    selectedScopeChannels.remove(channel)
+                } else {
+                    selectedScopeChannels.add(channel)
+                    if (!isScopePanelVisible) {
+                        isScopePanelVisible = true
+                    }
+                }
+                views.scopeView.setActiveChannels(selectedScopeChannels)
+                updateScopeHeaderAndCards(views)
+            }
+        }
+
+        var closedByDismiss = false
+        views.btnClose.setOnClickListener {
+            dialog.dismiss()
+        }
+        dialog.setOnDismissListener {
+            if (!closedByDismiss) {
+                closedByDismiss = true
+                measuringDialog = null
+                cancelLiveStreamJobOnly()
+                setResultText("Окно измерений закрыто. Связь с ЭБУ активна.")
+            }
+        }
+
+        dialog.show()
+
+        btnMeasuring.text = "ОКНО ОТКРЫТО"
         btnMeasuring.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#DC2626"))
-        setResultText("Скоростной опрос всех датчиков ЭБУ (Группы 001, 003, 004 + 002/005)...")
+        setResultText("Открыто окно измерений и осциллограммы (Группы 001, 003, 004 + 002/005)...")
 
         // Пауза фонового keep-alive 0x09 ускоряет опрос и исключает конкуренцию за busMutex
         protocol.isKeepAlivePaused = true
@@ -3522,6 +4488,7 @@ class MainActivity : AppCompatActivity() {
             var g2Supported = true
             var consecutiveErrors = 0
             var cycleCount = 0
+            var prevUpdateMs = 0L
 
             var lastRpm: Int? = null
             var lastTemp: Int? = null
@@ -3533,6 +4500,7 @@ class MainActivity : AppCompatActivity() {
             var lastBatteryV: Double? = null
             var lastInjMs: Double? = null
             var lastTiming: String? = null
+            var lastTimingDeg: Double? = null
             var lastLoadPct: Double? = null
             var lastSpeedKmh: Int? = null
             var lastAdaptPct: Double? = null
@@ -3541,7 +4509,7 @@ class MainActivity : AppCompatActivity() {
             var lastStatusBits: String? = null
 
             try {
-                while (isActive && protocol.isSessionActive) {
+                while (isActive && protocol.isSessionActive && dialog.isShowing) {
                     var gotValid = false
                     var lastErr: String? = null
                     var g1Fields = emptyList<Kw1281Protocol.MeasuredField>()
@@ -3584,6 +4552,7 @@ class MainActivity : AppCompatActivity() {
                                 m3.throttleAngle?.let { lastThrottle = it }
                                 m3.engineLoadPct?.let { lastLoadPct = it }
                                 m3.ignitionTiming?.let { lastTiming = it }
+                                m3.ignitionTimingDeg?.let { lastTimingDeg = it }
                                 m3.intakeAirTemp?.let { if (lastAirTemp == null) lastAirTemp = it }
                                 g3Fields = m3.fields
                             } else if (m3?.isUnsupportedNak == true) {
@@ -3673,76 +4642,103 @@ class MainActivity : AppCompatActivity() {
 
                     if (gotValid) {
                         consecutiveErrors = 0
-                        updateGaugeViews(
-                            rpm = lastRpm,
-                            temp = lastTemp,
-                            lambdaV = lastLambdaV,
-                            lambdaCorr = lastLambdaCorr,
-                            lambdaFactor = lastLambdaFactor,
-                            throttle = lastThrottle,
-                            batteryV = lastBatteryV,
-                            injMs = lastInjMs,
-                            airTemp = lastAirTemp,
-                            timing = lastTiming,
-                            loadPct = lastLoadPct,
-                            speedKmh = lastSpeedKmh,
-                            adaptPct = lastAdaptPct,
-                            idleSwitchClosed = lastIdleSwitchClosed,
-                            modeText = lastModeText,
-                            statusBits = lastStatusBits
-                        )
+                        val nowMs = System.currentTimeMillis()
+                        val hzText = if (prevUpdateMs > 0L && nowMs > prevUpdateMs) {
+                            val hz = 1000.0 / (nowMs - prevUpdateMs).toDouble()
+                            "%.1f Гц".format(hz)
+                        } else {
+                            "опрос..."
+                        }
+                        prevUpdateMs = nowMs
 
-                        val sb = StringBuilder()
-                        sb.append(if (useGroupZeroOnly) "ЖИВЫЕ ПАРАМЕТРЫ (ГРУППА 000):\\n" else "ЖИВЫЕ ПАРАМЕТРЫ ДАТЧИКОВ:\\n")
-                        sb.append("• Обороты (G40): ").append(lastRpm?.let { "$it об/мин" } ?: "---").append("\\n")
-                        sb.append("• ДТОЖ (G62): ").append(lastTemp?.let { "$it °C" } ?: "---").append("\\n")
-                        val lambdaText = when {
-                            lastLambdaV != null -> "%.2f В".format(lastLambdaV)
-                            lastLambdaCorr != null -> "%.1f %% (коррекция)".format(lastLambdaCorr)
-                            lastLambdaFactor != null -> "%.3f λ".format(lastLambdaFactor)
-                            else -> "---"
+                        val sampleMap = LinkedHashMap<SensorChannel, Float>()
+                        lastRpm?.let { sampleMap[SensorChannel.RPM] = it.toFloat() }
+                        lastTemp?.let { sampleMap[SensorChannel.COOLANT] = it.toFloat() }
+                        val lambdaNumeric = lastLambdaV ?: lastLambdaCorr ?: lastLambdaFactor
+                        val lambdaUnit = when {
+                            lastLambdaV != null -> "В"
+                            lastLambdaCorr != null -> "%"
+                            else -> "λ"
                         }
-                        sb.append("• Лямбда-зонд (G39): ").append(lambdaText).append("\\n")
-                        sb.append("• ДПДЗ угол (G69): ").append(lastThrottle?.let { "%.1f °".format(it) } ?: "---").append("\\n")
-                        val switchStr = when (lastIdleSwitchClosed) {
-                            true -> "ЗАМКНУТ (Холостой ход)"
-                            false -> "РАЗМКНУТ (Педаль газа нажата)"
-                            null -> "---"
-                        }
-                        sb.append("• Концевик ДЗ (F60): ").append(switchStr)
-                        lastModeText?.let { sb.append(" • Режим: $it") }
-                        sb.append("\\n")
-                        lastBatteryV?.let { sb.append("• Напряжение АКБ: %.2f В\\n".format(it)) }
-                        lastInjMs?.let { sb.append("• Время впрыска: %.2f мс\\n".format(it)) }
-                        lastAirTemp?.let { sb.append("• ДТВВ (G42): $it °C\\n") }
-                        lastTiming?.let { sb.append("• УОЗ: $it\\n") }
-                        lastLoadPct?.let { sb.append("• Нагрузка двигателя: %.1f %%\\n".format(it)) }
-                        lastSpeedKmh?.let { sb.append("• Скорость авто (G68): $it км/ч\\n") }
-                        lastAdaptPct?.let { sb.append("• Адаптация смеси (Гр.005): %.1f %%\\n".format(it)) }
+                        lambdaNumeric?.let { sampleMap[SensorChannel.LAMBDA] = it.toFloat() }
+                        lastThrottle?.let { sampleMap[SensorChannel.THROTTLE] = it.toFloat() }
+                        lastBatteryV?.let { sampleMap[SensorChannel.BATTERY] = it.toFloat() }
+                        lastInjMs?.let { sampleMap[SensorChannel.INJECTION] = it.toFloat() }
+                        lastAirTemp?.let { sampleMap[SensorChannel.AIR_TEMP] = it.toFloat() }
+                        lastTimingDeg?.let { sampleMap[SensorChannel.TIMING] = it.toFloat() }
+                        lastLoadPct?.let { sampleMap[SensorChannel.LOAD] = it.toFloat() }
+                        lastSpeedKmh?.let { sampleMap[SensorChannel.SPEED] = it.toFloat() }
+                        lastAdaptPct?.let { sampleMap[SensorChannel.ADAPTATION] = it.toFloat() }
+                        lastIdleSwitchClosed?.let { sampleMap[SensorChannel.IDLE_SWITCH] = if (it) 1f else 0f }
 
-                        if (g1Fields.isNotEmpty()) {
-                            sb.append("\\nГруппа 001: ").append(g1Fields.joinToString(" | ") { it.valueText })
+                        val rawSummary = buildString {
+                            append(if (useGroupZeroOnly) "Режим: Группа 000 (10 байт)\\n" else "Сырые группы KWP1281:\\n")
+                            if (g1Fields.isNotEmpty()) append("Гр.001: \${g1Fields.joinToString(" | ") { it.valueText }}\\n")
+                            if (g2Fields.isNotEmpty()) append("Гр.002: \${g2Fields.joinToString(" | ") { it.valueText }}\\n")
+                            if (g3Fields.isNotEmpty()) append("Гр.003: \${g3Fields.joinToString(" | ") { it.valueText }}\\n")
+                            if (g4Fields.isNotEmpty()) append("Гр.004: \${g4Fields.joinToString(" | ") { it.valueText }}\\n")
+                            if (g5Fields.isNotEmpty()) append("Гр.005: \${g5Fields.joinToString(" | ") { it.valueText }}\\n")
+                            if (g0Raw.isNotEmpty()) append("Байты 000: \${g0Raw.joinToString(" ") { "%03d".format(it) }}")
+                        }.trim()
+
+                        runOnUiThread {
+                            if (!dialog.isShowing) return@runOnUiThread
+                            views.tvStatus.text = "\${protocol.negotiatedBaud} бод • Частота: $hzText"
+                            views.scopeView.setLambdaUnitLabel(lambdaUnit)
+                            views.scopeView.appendSample(nowMs, sampleMap)
+
+                            lastRpm?.let { views.tvRpm.text = "$it" }
+                            lastTemp?.let { views.tvTemp.text = "$it" }
+                            if (lastLambdaV != null) {
+                                views.tvLambda.text = "%.2f".format(lastLambdaV)
+                                views.tvLambdaUnit.text = "Вольт"
+                            } else if (lastLambdaCorr != null) {
+                                views.tvLambda.text = "%.1f".format(lastLambdaCorr)
+                                views.tvLambdaUnit.text = "% коррекция"
+                            } else if (lastLambdaFactor != null) {
+                                views.tvLambda.text = "%.3f".format(lastLambdaFactor)
+                                views.tvLambdaUnit.text = "λ фактор"
+                            }
+                            lastThrottle?.let { views.tvThrottle.text = "%.1f".format(it) }
+                            lastBatteryV?.let { views.tvBattery.text = "%.2f".format(it) }
+                            lastInjMs?.let { views.tvInj.text = "%.2f".format(it) }
+                            lastAirTemp?.let { views.tvAirTemp.text = "$it" }
+                            lastTiming?.let { views.tvTiming.text = it }
+                            lastLoadPct?.let { views.tvLoad.text = "%.0f%%".format(it) }
+                            lastSpeedKmh?.let { views.tvSpeed.text = "$it" }
+                            lastAdaptPct?.let { views.tvAdapt.text = "%.1f%%".format(it) }
+
+                            if (lastIdleSwitchClosed != null || lastModeText != null || lastStatusBits != null) {
+                                when (lastIdleSwitchClosed) {
+                                    true -> {
+                                        views.tvIdleSwitch.text = "ЗАМКНУТ (ХХ)"
+                                        views.tvIdleSwitch.setTextColor(Color.parseColor("#10B981"))
+                                    }
+                                    false -> {
+                                        views.tvIdleSwitch.text = "РАЗОМКНУТ (Газ)"
+                                        views.tvIdleSwitch.setTextColor(Color.parseColor("#F59E0B"))
+                                    }
+                                    null -> {
+                                        views.tvIdleSwitch.text = "---"
+                                        views.tvIdleSwitch.setTextColor(Color.parseColor("#94A3B8"))
+                                    }
+                                }
+                                views.tvMode.text = "Режим: \${lastModeText ?: lastStatusBits ?: "---"}"
+                            }
+
+                            if (rawSummary.isNotEmpty()) {
+                                views.tvRawGroups.text = rawSummary
+                            }
                         }
-                        if (g2Fields.isNotEmpty()) {
-                            sb.append("\\nГруппа 002: ").append(g2Fields.joinToString(" | ") { it.valueText })
-                        }
-                        if (g3Fields.isNotEmpty()) {
-                            sb.append("\\nГруппа 003: ").append(g3Fields.joinToString(" | ") { it.valueText })
-                        }
-                        if (g4Fields.isNotEmpty()) {
-                            sb.append("\\nГруппа 004: ").append(g4Fields.joinToString(" | ") { it.valueText })
-                        }
-                        if (g5Fields.isNotEmpty()) {
-                            sb.append("\\nГруппа 005: ").append(g5Fields.joinToString(" | ") { it.valueText })
-                        }
-                        if (g0Raw.isNotEmpty()) {
-                            sb.append("\\nБайты 000: ").append(g0Raw.joinToString(" ") { "%03d".format(it) })
-                        }
-                        setResultText(sb.toString())
                     } else {
                         consecutiveErrors++
                         if (consecutiveErrors >= 3) {
-                            setResultText("⚠️ Нет данных от ЭБУ при чтении измерений.\\nПричина: \${lastErr ?: "ЭБУ не отвечает"}.\\nПроверьте зажигание и соединение K-Line.")
+                            runOnUiThread {
+                                if (dialog.isShowing) {
+                                    views.tvStatus.text = "Нет ответа от ЭБУ..."
+                                    views.tvRawGroups.text = "⚠️ Нет данных от ЭБУ при чтении измерений.\\nПричина: \${lastErr ?: "ЭБУ не отвечает"}.\\nПроверьте зажигание и соединение K-Line."
+                                }
+                            }
                         }
                     }
 
@@ -3764,7 +4760,38 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun stopLiveStream() {
+    private fun updateScopeHeaderAndCards(views: MeasuringWindowViews) {
+        val density = resources.displayMetrics.density
+        views.layoutScopePanel.visibility = if (isScopePanelVisible) View.VISIBLE else View.GONE
+        views.btnToggleScope.text = if (isScopePanelVisible) "СКРЫТЬ ГРАФИК" else "ГРАФИКИ"
+        views.btnToggleScope.backgroundTintList = ColorStateList.valueOf(
+            Color.parseColor(if (isScopePanelVisible) "#0284C7" else "#334155")
+        )
+        views.tvScopeCount.text = "ОСЦИЛЛОГРАММА (\${selectedScopeChannels.size} кан.)"
+
+        for ((channel, pair) in views.channelCards) {
+            val (card, badge) = pair
+            val active = selectedScopeChannels.contains(channel)
+            val bg = GradientDrawable().apply {
+                setColor(Color.parseColor(if (active) "#0F172A" else "#1E293B"))
+                cornerRadius = 8f * density
+                setStroke(
+                    if (active) (2f * density).toInt() else (1f * density).toInt(),
+                    if (active) channel.colorInt else Color.parseColor("#334155")
+                )
+            }
+            card.background = bg
+            if (active) {
+                badge.text = "● НА ГРАФИКЕ"
+                badge.setTextColor(channel.colorInt)
+            } else {
+                badge.text = "+ график"
+                badge.setTextColor(Color.parseColor("#64748B"))
+            }
+        }
+    }
+
+    private fun cancelLiveStreamJobOnly() {
         liveStreamJob?.cancel()
         liveStreamJob = null
         if (basicSettingsJob == null) {
@@ -3776,61 +4803,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateGaugeViews(
-        rpm: Int?,
-        temp: Int?,
-        lambdaV: Double?,
-        lambdaCorr: Double?,
-        lambdaFactor: Double?,
-        throttle: Double?,
-        batteryV: Double? = null,
-        injMs: Double? = null,
-        airTemp: Int? = null,
-        timing: String? = null,
-        loadPct: Double? = null,
-        speedKmh: Int? = null,
-        adaptPct: Double? = null,
-        idleSwitchClosed: Boolean? = null,
-        modeText: String? = null,
-        statusBits: String? = null
-    ) {
-        runOnUiThread {
-            rpm?.let { tvGaugeRpm.text = "$it" }
-            temp?.let { tvGaugeTemp.text = "$it" }
-            if (lambdaV != null) {
-                tvGaugeLambda.text = "%.2f".format(lambdaV)
-                tvGaugeLambdaUnit.text = "Вольт"
-            } else if (lambdaCorr != null) {
-                tvGaugeLambda.text = "%.1f".format(lambdaCorr)
-                tvGaugeLambdaUnit.text = "% корр."
-            } else if (lambdaFactor != null) {
-                tvGaugeLambda.text = "%.3f".format(lambdaFactor)
-                tvGaugeLambdaUnit.text = "λ факт."
-            }
-            throttle?.let { tvGaugeThrottle.text = "%.1f".format(it) }
-            batteryV?.let { tvGaugeBattery.text = "%.2f".format(it) }
-            injMs?.let { tvGaugeInj.text = "%.2f".format(it) }
-            airTemp?.let { tvGaugeAirTemp.text = "$it" }
-            timing?.let { tvGaugeTiming.text = it }
-            loadPct?.let { tvGaugeLoad.text = "%.0f%%".format(it) }
-            speedKmh?.let { tvGaugeSpeed.text = "$it км/ч" }
-            adaptPct?.let { tvGaugeAdapt.text = "%.1f%%".format(it) }
-
-            if (idleSwitchClosed != null || modeText != null || statusBits != null) {
-                val f60Label = when (idleSwitchClosed) {
-                    true -> "✅ ЗАМКНУТ (ХХ)"
-                    false -> "⚡ РАЗОМКНУТ (Газ)"
-                    null -> "---"
-                }
-                val modePart = modeText ?: statusBits ?: "---"
-                tvGaugeIdleSwitch.text = "Концевик ДЗ (F60): $f60Label  •  $modePart"
-                when (idleSwitchClosed) {
-                    true -> tvGaugeIdleSwitch.setTextColor(Color.parseColor("#10B981"))
-                    false -> tvGaugeIdleSwitch.setTextColor(Color.parseColor("#F59E0B"))
-                    null -> tvGaugeIdleSwitch.setTextColor(Color.parseColor("#94A3B8"))
-                }
-            }
-        }
+    private fun stopLiveStream() {
+        cancelLiveStreamJobOnly()
+        try {
+            measuringDialog?.dismiss()
+        } catch (_: Throwable) {}
+        measuringDialog = null
     }
 
     // Тест исполнительных механизмов (0x04)
@@ -3946,26 +4924,22 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     val m = res.measurement
-                    if (m != null) {
-                        updateGaugeViews(
-                            rpm = m.rpm,
-                            temp = m.coolantTemp,
-                            lambdaV = m.lambdaVoltage,
-                            lambdaCorr = m.lambdaCorrection,
-                            lambdaFactor = m.lambdaFactor,
-                            throttle = m.throttleAngle,
-                            batteryV = m.batteryVoltage,
-                            injMs = m.injectionTimeMs,
-                            airTemp = m.intakeAirTemp,
-                            timing = m.ignitionTiming,
-                            loadPct = m.engineLoadPct,
-                            speedKmh = m.vehicleSpeedKmh,
-                            adaptPct = m.mixtureAdaptationPct,
-                            idleSwitchClosed = m.idleSwitchClosed,
-                            modeText = m.operatingModeText,
-                            statusBits = m.rawStatusBits
-                        )
-                    }
+                    val sensorSummary = if (m != null) {
+                        buildString {
+                            m.rpm?.let { append("• Обороты: $it об/мин\\n") }
+                            m.coolantTemp?.let { append("• ДТОЖ: $it °C\\n") }
+                            m.throttleAngle?.let { append("• ДПДЗ: %.1f °\\n".format(it)) }
+                            m.ignitionTiming?.let { append("• УОЗ: $it\\n") }
+                            when {
+                                m.lambdaVoltage != null -> append("• Лямбда: %.2f В\\n".format(m.lambdaVoltage))
+                                m.lambdaCorrection != null -> append("• Лямбда: %.1f %%\\n".format(m.lambdaCorrection))
+                                m.lambdaFactor != null -> append("• Лямбда: %.3f λ\\n".format(m.lambdaFactor))
+                            }
+                            m.idleSwitchClosed?.let {
+                                append("• Концевик ДЗ (F60): \${if (it) "ЗАМКНУТ (ХХ)" else "РАЗОМКНУТ"}\\n")
+                            }
+                        }
+                    } else ""
 
                     val extraLine = when {
                         m != null && m.rawValues.isNotEmpty() && m.rawValues.size == 10 ->
@@ -3978,6 +4952,7 @@ class MainActivity : AppCompatActivity() {
                     setResultText("🔧 РЕЖИМ БАЗОВЫХ УСТАНОВОК (Группа %03d) АКТИВЕН!\\n\\n".format(activeGroup) +
                             "• ЭБУ зафиксировал базовый угол опережения зажигания (keep-alive 0x09 приостановлен).\\n" +
                             "• Для регулировки УОЗ 6° до ВМТ проверьте прогрев (>80°C) и работайте стробоскопом по метке маховика.\\n" +
+                            (if (sensorSummary.isNotEmpty()) "\\n$sensorSummary" else "") +
                             "• $extraLine\\n\\n" +
                             "Нажмите «СТОП БАЗОВЫЕ» для выхода из режима.")
 
