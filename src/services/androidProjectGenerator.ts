@@ -142,9 +142,9 @@ class Ftdi5BaudDriver(
             // Устанавливаем режим UART 8N1 и активные DTR/RTS
             setUartMode(baud)
 
-            // Снижаем FTDI Latency Timer до 2 мс для мгновенного отклика K-Line
+            // Снижаем FTDI Latency Timer до 1 мс для минимальной задержки K-Line при опросе датчиков
             try {
-                connection?.controlTransfer(0x40, 0x09, 2, 1, null, 0, 100)
+                connection?.controlTransfer(0x40, 0x09, 1, 1, null, 0, 100)
             } catch (t: Throwable) {}
 
             // Первичная очистка буферов
@@ -296,7 +296,7 @@ class Ftdi5BaudDriver(
         while (true) {
             val remaining = (timeoutMs - (System.currentTimeMillis() - start)).toInt()
             if (remaining <= 0) break
-            val slice = remaining.coerceIn(5, 30)
+            val slice = remaining.coerceIn(2, 20)
 
             try {
                 val readLen = p.read(tempBuf, slice)
@@ -352,7 +352,7 @@ class Ftdi5BaudDriver(
 
                 // 2. Проверяем, является ли байт побитовой инверсией (~byte)
                 if (rx == compExpected) {
-                    delay(3) // Межбайтная пауза ~3 мс по спецификации KWP1281
+                    delay(2) // Межбайтная пауза ~2-3 мс по спецификации KWP1281
                     return@withContext true
                 }
 
@@ -361,7 +361,7 @@ class Ftdi5BaudDriver(
                     continue
                 }
             }
-            delay(5)
+            delay(4)
         }
         return@withContext false
     }
@@ -375,11 +375,11 @@ class Ftdi5BaudDriver(
         val p = port ?: return@withContext
         try {
             p.write(byteArrayOf(0x03), timeoutMs)
-            val rx = readByte(35)
+            val rx = readByte(25)
             if (rx >= 0 && rx != 0x03) {
                 unreadByte(rx)
             }
-            delay(6) // Межблочная пауза ~5–8 мс по спецификации KWP1281
+            delay(5) // Межблочная пауза ~5–8 мс по спецификации KWP1281
         } catch (t: Throwable) {}
     }
 
@@ -392,7 +392,7 @@ class Ftdi5BaudDriver(
         val sentVal = b.toInt() and 0xFF
         try {
             p.write(byteArrayOf(b), timeoutMs)
-            val rx = readByte(35)
+            val rx = readByte(25)
             if (rx >= 0 && rx != sentVal) {
                 unreadByte(rx)
             }
@@ -503,6 +503,13 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val batteryVoltage: Double? = null,
         val intakeAirTemp: Int? = null,
         val injectionTimeMs: Double? = null,
+        val ignitionTiming: String? = null,
+        val engineLoadPct: Double? = null,
+        val vehicleSpeedKmh: Int? = null,
+        val mixtureAdaptationPct: Double? = null,
+        val idleSwitchClosed: Boolean? = null,
+        val operatingModeText: String? = null,
+        val rawStatusBits: String? = null,
         val rawValues: List<Int> = emptyList(),
         val fields: List<MeasuredField> = emptyList(),
         val isUnsupportedNak: Boolean = false,
@@ -814,17 +821,14 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val len = driver.readByte(timeoutMs)
         if (len < 3 || len > 32) return null
         sendByteAck(len)
-        delay(2)
 
         val counter = driver.readByte(400)
         if (counter < 0) return null
         sendByteAck(counter)
-        delay(2)
 
         val title = driver.readByte(400)
         if (title < 0) return null
         sendByteAck(title)
-        delay(2)
 
         val dataLen = len - 3
         val data = ByteArray(dataLen)
@@ -833,12 +837,11 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             if (d < 0) return null
             data[i] = d.toByte()
             sendByteAck(d)
-            delay(2)
         }
 
         // Конец блока 0x03 (не подтверждается инверсией)
         driver.readByte(400)
-        delay(6)
+        delay(5)
 
         blockCounter = counter
         return KwBlock(len, counter, title, data)
@@ -1492,19 +1495,29 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             val throttleRaw = raw[1]
             val rpmRaw = raw[2]
             val lambdaRaw = raw[4]
+            val adaptIdleRaw = raw[5]
             val batteryRaw = raw[8]
+            val airTempRaw = raw[9]
 
-            // На Mono-Motronic 1.2.3 ДТОЖ в группе 000 может быть прямым (>=60 при прогреве) или инверсным NTC (<=45 при 85-100°C)
+            // На Mono-Motronic 1.2.3 ДТОЖ/ДТВВ в группе 000 может быть прямым (>=60 при прогреве) или инверсным NTC
             val coolantC = if (coolantRaw > 60) {
                 (coolantRaw * 0.65 - 30.0).toInt()
             } else {
                 (115.0 - coolantRaw * 1.4).toInt()
             }
+            val airTempC = if (airTempRaw > 60) {
+                (airTempRaw * 0.65 - 30.0).toInt()
+            } else {
+                (115.0 - airTempRaw * 1.4).toInt()
+            }
             val rpm = rpmRaw * 25
             // Окно 5 в группе 000 Mono-Motronic — интегратор лямбда-регулирования (центр 128 = 0%)
             val lambdaCorr = ((lambdaRaw - 128) * 100.0 / 128.0).let { "%.1f".format(it).replace(',', '.').toDoubleOrNull() }
+            val adaptPct = ((adaptIdleRaw - 128) * 100.0 / 128.0).let { "%.1f".format(it).replace(',', '.').toDoubleOrNull() }
             val throttleAngle = (throttleRaw * 0.35).let { "%.1f".format(it).replace(',', '.').toDoubleOrNull() }
             val batteryV = (batteryRaw * 0.08).let { "%.1f".format(it).replace(',', '.').toDoubleOrNull() }
+            val idleClosed = throttleRaw <= 12
+            val modeText = if (idleClosed) "Холостой ход (по Гр.000)" else "Нагрузка (газ нажат)"
 
             val fields = raw.mapIndexed { i, v ->
                 MeasuredField(i + 1, "%03d".format(v), 0, 0, v, v.toDouble())
@@ -1517,6 +1530,10 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 lambdaCorrection = lambdaCorr,
                 throttleAngle = throttleAngle,
                 batteryVoltage = batteryV,
+                intakeAirTemp = airTempC,
+                mixtureAdaptationPct = adaptPct,
+                idleSwitchClosed = idleClosed,
+                operatingModeText = modeText,
                 rawValues = raw,
                 fields = fields
             )
@@ -1532,6 +1549,13 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         var parsedThrottle: Double? = null
         var parsedBatteryV: Double? = null
         var parsedInjMs: Double? = null
+        var parsedTiming: String? = null
+        var parsedLoadPct: Double? = null
+        var parsedSpeedKmh: Int? = null
+        var parsedMixtureAdaptPct: Double? = null
+        var parsedIdleSwitchClosed: Boolean? = null
+        var parsedModeText: String? = null
+        var parsedStatusBits: String? = null
 
         val fields = mutableListOf<MeasuredField>()
         var idx = 0
@@ -1566,7 +1590,11 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     }
                 }
                 FieldKind.LAMBDA_PCT -> {
-                    if (group != 5) {
+                    if (group == 5) {
+                        if (itemNum == 3 || parsedMixtureAdaptPct == null) {
+                            parsedMixtureAdaptPct = decoded.numeric
+                        }
+                    } else {
                         parsedLambdaCorr = decoded.numeric
                     }
                 }
@@ -1576,15 +1604,61 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     }
                 }
                 FieldKind.ANGLE -> {
-                    // В группе 3 поле 3 — угол открытия дроссельной заслонки (ДПДЗ G69)
-                    if (group == 3 || parsedThrottle == null) {
+                    // В группе 3 поле 3 — угол ДПДЗ (G69), а поле 4 может быть УОЗ!
+                    if (group == 3 && itemNum == 4) {
+                        if (parsedTiming == null) parsedTiming = "%.1f°".format(decoded.numeric)
+                    } else if (itemNum == 3 || (group != 3 && parsedThrottle == null)) {
                         parsedThrottle = decoded.numeric
                     }
                 }
+                FieldKind.TIMING -> {
+                    parsedTiming = decoded.displayText
+                }
                 FieldKind.LOAD_PCT -> {
-                    // LOAD_PCT (формулы 0x02/0x17/0x21) — это нагрузка/скважность/адаптация, не подменяем им лямбду!
+                    if (group == 3 || group == 4) {
+                        if (parsedLoadPct == null) parsedLoadPct = decoded.numeric
+                    } else if (group == 5) {
+                        if (itemNum == 3 || parsedMixtureAdaptPct == null) {
+                            parsedMixtureAdaptPct = decoded.numeric
+                        }
+                    }
                 }
                 FieldKind.INJ_MS -> parsedInjMs = decoded.numeric
+                FieldKind.SPEED -> parsedSpeedKmh = decoded.numeric.toInt()
+                FieldKind.BITS -> {
+                    parsedStatusBits = decoded.displayText
+                    if ((group == 4 || group == 5) && itemNum == 4) {
+                        when {
+                            (b and 0x02) != 0 -> {
+                                parsedIdleSwitchClosed = true
+                                parsedModeText = "Холостой ход (ХХ)"
+                            }
+                            (b and 0x01) != 0 -> {
+                                parsedIdleSwitchClosed = true
+                                parsedModeText = "ПХХ (Отсечка)"
+                            }
+                            (b and 0x08) != 0 -> {
+                                parsedIdleSwitchClosed = false
+                                parsedModeText = "Полная нагрузка"
+                            }
+                            (b and 0x04) != 0 -> {
+                                parsedIdleSwitchClosed = false
+                                parsedModeText = "Частичная нагрузка"
+                            }
+                            (b and 0x10) != 0 -> {
+                                parsedIdleSwitchClosed = false
+                                parsedModeText = "Обогащение (уск.)"
+                            }
+                            else -> {
+                                parsedIdleSwitchClosed = false
+                                parsedModeText = "Активен"
+                            }
+                        }
+                    } else if (group == 1 && itemNum == 4 && parsedIdleSwitchClosed == null) {
+                        // В группе 001 поле 4 бит 3 (0x08): 0 = концевик ХХ F60 замкнут, 1 = дроссель приоткрыт
+                        parsedIdleSwitchClosed = (b and 0x08) == 0
+                    }
+                }
                 else -> {
                     // Запасная интерпретация по стандартной позиции поля Группы 001,
                     // если ЭБУ прислал нестандартный код формулы
@@ -1611,13 +1685,20 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             batteryVoltage = parsedBatteryV,
             intakeAirTemp = parsedAirTemp,
             injectionTimeMs = parsedInjMs,
+            ignitionTiming = parsedTiming,
+            engineLoadPct = parsedLoadPct,
+            vehicleSpeedKmh = parsedSpeedKmh,
+            mixtureAdaptationPct = parsedMixtureAdaptPct,
+            idleSwitchClosed = parsedIdleSwitchClosed,
+            operatingModeText = parsedModeText,
+            rawStatusBits = parsedStatusBits,
             rawValues = raw,
             fields = fields
         )
     }
 
     private enum class FieldKind {
-        RPM, TEMP, VOLTAGE, LAMBDA_PCT, LAMBDA_FACTOR, ANGLE, LOAD_PCT, INJ_MS, SPEED, BITS, OTHER
+        RPM, TEMP, VOLTAGE, LAMBDA_PCT, LAMBDA_FACTOR, ANGLE, TIMING, LOAD_PCT, INJ_MS, SPEED, BITS, OTHER
     }
 
     private data class DecodedFormula(
@@ -1643,7 +1724,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             0x04 -> {
                 val v = abs(b - 127) * 0.01 * a
                 val dir = if (b < 127) "до ВМТ" else "после ВМТ"
-                DecodedFormula(v, "%.1f° $dir".format(v), FieldKind.OTHER)
+                DecodedFormula(v, "%.1f° $dir".format(v), FieldKind.TIMING)
             }
             0x05 -> {
                 val v = a * (b - 100) * 0.1
@@ -1955,147 +2036,416 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         android:id="@+id/layoutLiveData"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:background="#0F172A"
-        android:padding="8dp"
-        android:layout_marginBottom="8dp">
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:layout_marginBottom="6dp">
 
-        <!-- RPM -->
+        <!-- Row 1: Primary Sensors -->
         <LinearLayout
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical"
-            android:gravity="center">
+            android:orientation="horizontal">
 
-            <TextView
-                android:layout_width="wrap_content"
+            <!-- RPM -->
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="ОБОРОТЫ"
-                android:textColor="#64748B"
-                android:textSize="10sp"
-                android:textStyle="bold" />
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center">
 
-            <TextView
-                android:id="@+id/tvGaugeRpm"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="---"
-                android:textColor="#38BDF8"
-                android:textSize="17sp"
-                android:textStyle="bold"
-                android:typeface="monospace" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ОБОРОТЫ"
+                    android:textColor="#64748B"
+                    android:textSize="9sp"
+                    android:textStyle="bold" />
 
-            <TextView
-                android:layout_width="wrap_content"
+                <TextView
+                    android:id="@+id/tvGaugeRpm"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="---"
+                    android:textColor="#38BDF8"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:typeface="monospace" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="об/мин"
+                    android:textColor="#94A3B8"
+                    android:textSize="9sp" />
+            </LinearLayout>
+
+            <!-- Coolant Temp -->
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="об/мин"
-                android:textColor="#94A3B8"
-                android:textSize="10sp" />
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ДТОЖ G62"
+                    android:textColor="#64748B"
+                    android:textSize="9sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvGaugeTemp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="---"
+                    android:textColor="#F59E0B"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:typeface="monospace" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="°C"
+                    android:textColor="#94A3B8"
+                    android:textSize="9sp" />
+            </LinearLayout>
+
+            <!-- Lambda O2 -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ЛЯМБДА G39"
+                    android:textColor="#64748B"
+                    android:textSize="9sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvGaugeLambda"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="---"
+                    android:textColor="#10B981"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:typeface="monospace" />
+
+                <TextView
+                    android:id="@+id/tvGaugeLambdaUnit"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Вольт"
+                    android:textColor="#94A3B8"
+                    android:textSize="9sp" />
+            </LinearLayout>
+
+            <!-- Throttle Angle / TPS -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ДПДЗ G69"
+                    android:textColor="#64748B"
+                    android:textSize="9sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvGaugeThrottle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="---"
+                    android:textColor="#EC4899"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:typeface="monospace" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="угол °"
+                    android:textColor="#94A3B8"
+                    android:textSize="9sp" />
+            </LinearLayout>
         </LinearLayout>
 
-        <!-- Coolant Temp -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#1E293B"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="4dp" />
+
+        <!-- Row 2: Secondary Sensors (Battery, Injection Time, Intake Air Temp, Ignition Timing) -->
         <LinearLayout
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical"
-            android:gravity="center">
+            android:orientation="horizontal">
 
-            <TextView
-                android:layout_width="wrap_content"
+            <!-- Battery Voltage -->
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="ДТОЖ G62"
-                android:textColor="#64748B"
-                android:textSize="10sp"
-                android:textStyle="bold" />
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center">
 
-            <TextView
-                android:id="@+id/tvGaugeTemp"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="---"
-                android:textColor="#F59E0B"
-                android:textSize="17sp"
-                android:textStyle="bold"
-                android:typeface="monospace" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="АКБ"
+                    android:textColor="#64748B"
+                    android:textSize="9sp"
+                    android:textStyle="bold" />
 
-            <TextView
-                android:layout_width="wrap_content"
+                <TextView
+                    android:id="@+id/tvGaugeBattery"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="---"
+                    android:textColor="#A78BFA"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:typeface="monospace" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Вольт"
+                    android:textColor="#94A3B8"
+                    android:textSize="9sp" />
+            </LinearLayout>
+
+            <!-- Injection Time -->
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="°C"
-                android:textColor="#94A3B8"
-                android:textSize="10sp" />
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ВПРЫСК"
+                    android:textColor="#64748B"
+                    android:textSize="9sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvGaugeInj"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="---"
+                    android:textColor="#2DD4BF"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:typeface="monospace" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="мс"
+                    android:textColor="#94A3B8"
+                    android:textSize="9sp" />
+            </LinearLayout>
+
+            <!-- Intake Air Temp G42 -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ДТВВ G42"
+                    android:textColor="#64748B"
+                    android:textSize="9sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvGaugeAirTemp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="---"
+                    android:textColor="#FB923C"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:typeface="monospace" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="°C"
+                    android:textColor="#94A3B8"
+                    android:textSize="9sp" />
+            </LinearLayout>
+
+            <!-- Ignition Timing -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="УОЗ"
+                    android:textColor="#64748B"
+                    android:textSize="9sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvGaugeTiming"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="---"
+                    android:textColor="#FACC15"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:typeface="monospace" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="зажигание"
+                    android:textColor="#94A3B8"
+                    android:textSize="9sp" />
+            </LinearLayout>
         </LinearLayout>
 
-        <!-- Lambda O2 -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#1E293B"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="4dp" />
+
+        <!-- Row 3: Load, Speed, Adaptation -->
         <LinearLayout
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical"
-            android:gravity="center">
+            android:orientation="horizontal">
 
-            <TextView
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="ЛЯМБДА G39"
-                android:textColor="#64748B"
-                android:textSize="10sp"
-                android:textStyle="bold" />
+                android:layout_weight="1"
+                android:orientation="horizontal"
+                android:gravity="center">
 
-            <TextView
-                android:id="@+id/tvGaugeLambda"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="---"
-                android:textColor="#10B981"
-                android:textSize="17sp"
-                android:textStyle="bold"
-                android:typeface="monospace" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="НАГР: "
+                    android:textColor="#64748B"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
 
-            <TextView
-                android:id="@+id/tvGaugeLambdaUnit"
-                android:layout_width="wrap_content"
+                <TextView
+                    android:id="@+id/tvGaugeLoad"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="---"
+                    android:textColor="#E2E8F0"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:typeface="monospace" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="Вольт"
-                android:textColor="#94A3B8"
-                android:textSize="10sp" />
+                android:layout_weight="1"
+                android:orientation="horizontal"
+                android:gravity="center">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="СКОР: "
+                    android:textColor="#64748B"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvGaugeSpeed"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="---"
+                    android:textColor="#E2E8F0"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:typeface="monospace" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="horizontal"
+                android:gravity="center">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="АДАПТ: "
+                    android:textColor="#64748B"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvGaugeAdapt"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="---"
+                    android:textColor="#E2E8F0"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:typeface="monospace" />
+            </LinearLayout>
         </LinearLayout>
 
-        <!-- Throttle Angle / TPS -->
-        <LinearLayout
-            android:layout_width="0dp"
+        <!-- Row 4: Throttle Idle Switch (F60) & Operating Mode Bar -->
+        <TextView
+            android:id="@+id/tvGaugeIdleSwitch"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical"
-            android:gravity="center">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="ДПДЗ G69"
-                android:textColor="#64748B"
-                android:textSize="10sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/tvGaugeThrottle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="---"
-                android:textColor="#EC4899"
-                android:textSize="17sp"
-                android:textStyle="bold"
-                android:typeface="monospace" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="угол °"
-                android:textColor="#94A3B8"
-                android:textSize="10sp" />
-        </LinearLayout>
+            android:layout_marginTop="4dp"
+            android:background="#1E293B"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:text="Концевик ДЗ (F60): ---  •  Режим: ---"
+            android:textColor="#94A3B8"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:gravity="center" />
     </LinearLayout>
 
     <!-- Immobilizer Status Card (visible when Immo tab selected) -->
@@ -2579,6 +2929,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvGaugeLambda: TextView
     private lateinit var tvGaugeLambdaUnit: TextView
     private lateinit var tvGaugeThrottle: TextView
+    private lateinit var tvGaugeBattery: TextView
+    private lateinit var tvGaugeInj: TextView
+    private lateinit var tvGaugeAirTemp: TextView
+    private lateinit var tvGaugeTiming: TextView
+    private lateinit var tvGaugeLoad: TextView
+    private lateinit var tvGaugeSpeed: TextView
+    private lateinit var tvGaugeAdapt: TextView
+    private lateinit var tvGaugeIdleSwitch: TextView
 
     // Панель иммобилайзера (Immo)
     private lateinit var layoutImmoStatus: LinearLayout
@@ -2689,6 +3047,14 @@ class MainActivity : AppCompatActivity() {
             tvGaugeLambda = findViewById(R.id.tvGaugeLambda)
             tvGaugeLambdaUnit = findViewById(R.id.tvGaugeLambdaUnit)
             tvGaugeThrottle = findViewById(R.id.tvGaugeThrottle)
+            tvGaugeBattery = findViewById(R.id.tvGaugeBattery)
+            tvGaugeInj = findViewById(R.id.tvGaugeInj)
+            tvGaugeAirTemp = findViewById(R.id.tvGaugeAirTemp)
+            tvGaugeTiming = findViewById(R.id.tvGaugeTiming)
+            tvGaugeLoad = findViewById(R.id.tvGaugeLoad)
+            tvGaugeSpeed = findViewById(R.id.tvGaugeSpeed)
+            tvGaugeAdapt = findViewById(R.id.tvGaugeAdapt)
+            tvGaugeIdleSwitch = findViewById(R.id.tvGaugeIdleSwitch)
 
             layoutImmoStatus = findViewById(R.id.layoutImmoStatus)
             tvImmoKeyStatus = findViewById(R.id.tvImmoKeyStatus)
@@ -2830,6 +3196,15 @@ class MainActivity : AppCompatActivity() {
         tvGaugeLambda.text = "---"
         tvGaugeLambdaUnit.text = "Вольт"
         tvGaugeThrottle.text = "---"
+        tvGaugeBattery.text = "---"
+        tvGaugeInj.text = "---"
+        tvGaugeAirTemp.text = "---"
+        tvGaugeTiming.text = "---"
+        tvGaugeLoad.text = "---"
+        tvGaugeSpeed.text = "---"
+        tvGaugeAdapt.text = "---"
+        tvGaugeIdleSwitch.text = "Концевик ДЗ (F60): ---  •  Режим: ---"
+        tvGaugeIdleSwitch.setTextColor(Color.parseColor("#94A3B8"))
     }
 
     private fun setResultText(msg: String) {
@@ -3134,7 +3509,10 @@ class MainActivity : AppCompatActivity() {
         layoutActuatorTest.visibility = View.GONE
         btnMeasuring.text = "СТОП (08)"
         btnMeasuring.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#DC2626"))
-        setResultText("Опрос живых параметров датчиков (Группы 001 и 003 / 000)...")
+        setResultText("Скоростной опрос всех датчиков ЭБУ (Группы 001, 003, 004 + 002/005)...")
+
+        // Пауза фонового keep-alive 0x09 ускоряет опрос и исключает конкуренцию за busMutex
+        protocol.isKeepAlivePaused = true
 
         liveStreamJob = lifecycleScope.launch {
             var useGroupZeroOnly = false
@@ -3154,16 +3532,25 @@ class MainActivity : AppCompatActivity() {
             var lastAirTemp: Int? = null
             var lastBatteryV: Double? = null
             var lastInjMs: Double? = null
+            var lastTiming: String? = null
+            var lastLoadPct: Double? = null
+            var lastSpeedKmh: Int? = null
+            var lastAdaptPct: Double? = null
+            var lastIdleSwitchClosed: Boolean? = null
+            var lastModeText: String? = null
+            var lastStatusBits: String? = null
 
             try {
                 while (isActive && protocol.isSessionActive) {
                     var gotValid = false
                     var lastErr: String? = null
                     var g1Fields = emptyList<Kw1281Protocol.MeasuredField>()
+                    var g2Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g3Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g4Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g5Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g0Raw = emptyList<Int>()
+                    var gotG4SwitchThisCycle = false
 
                     if (!useGroupZeroOnly) {
                         val m1 = protocol.readMeasuringGroup(1) { }
@@ -3177,6 +3564,10 @@ class MainActivity : AppCompatActivity() {
                                 m1.lambdaVoltage?.let { lastLambdaV = it }
                                 m1.lambdaCorrection?.let { lastLambdaCorr = it }
                                 m1.lambdaFactor?.let { lastLambdaFactor = it }
+                                if (m1.idleSwitchClosed != null && (!g4Supported || lastIdleSwitchClosed == null)) {
+                                    lastIdleSwitchClosed = m1.idleSwitchClosed
+                                }
+                                m1.rawStatusBits?.let { if (!g4Supported || lastStatusBits == null) lastStatusBits = it }
                                 g1Fields = m1.fields
                             } else {
                                 lastErr = m1.errorMessage
@@ -3184,65 +3575,83 @@ class MainActivity : AppCompatActivity() {
                         }
 
                         if (!useGroupZeroOnly && g3Supported && isActive && protocol.isSessionActive) {
-                            delay(50)
+                            delay(10)
                             val m3 = protocol.readMeasuringGroup(3) { }
                             if (m3 != null && !m3.isUnsupportedNak && m3.errorMessage == null) {
                                 gotValid = true
-                                m3.rpm?.let { if (lastRpm == null) lastRpm = it }
+                                m3.rpm?.let { lastRpm = it }
                                 m3.coolantTemp?.let { if (lastTemp == null) lastTemp = it }
                                 m3.throttleAngle?.let { lastThrottle = it }
-                                m3.intakeAirTemp?.let { lastAirTemp = it }
+                                m3.engineLoadPct?.let { lastLoadPct = it }
+                                m3.ignitionTiming?.let { lastTiming = it }
+                                m3.intakeAirTemp?.let { if (lastAirTemp == null) lastAirTemp = it }
                                 g3Fields = m3.fields
                             } else if (m3?.isUnsupportedNak == true) {
                                 g3Supported = false
                             }
                         }
 
-                        // Если ДТОЖ не получен из Группы 001 — добираем из Группы 004
-                        if (!useGroupZeroOnly && g4Supported && (lastTemp == null || cycleCount == 0) && isActive && protocol.isSessionActive) {
-                            delay(50)
+                        // Группа 004: концевик ДЗ (F60), режим работы, нагрузка, скорость или ДТОЖ
+                        if (!useGroupZeroOnly && g4Supported && isActive && protocol.isSessionActive) {
+                            delay(10)
                             val m4 = protocol.readMeasuringGroup(4) { }
                             if (m4 != null && !m4.isUnsupportedNak && m4.errorMessage == null) {
                                 gotValid = true
-                                m4.coolantTemp?.let { lastTemp = it }
+                                m4.rpm?.let { if (lastRpm == null) lastRpm = it }
+                                m4.coolantTemp?.let { if (lastTemp == null) lastTemp = it }
                                 m4.intakeAirTemp?.let { if (lastAirTemp == null) lastAirTemp = it }
+                                m4.engineLoadPct?.let { if (lastLoadPct == null) lastLoadPct = it }
+                                m4.vehicleSpeedKmh?.let { lastSpeedKmh = it }
+                                m4.idleSwitchClosed?.let {
+                                    lastIdleSwitchClosed = it
+                                    gotG4SwitchThisCycle = true
+                                }
+                                m4.operatingModeText?.let { lastModeText = it }
+                                m4.rawStatusBits?.let { lastStatusBits = it }
                                 g4Fields = m4.fields
                             } else if (m4?.isUnsupportedNak == true) {
                                 g4Supported = false
                             }
                         }
 
-                        // Группа 005 на Mono-Motronic содержит адаптацию смеси (не подменяет лямбда-коррекцию из Гр. 001!)
-                        if (!useGroupZeroOnly && g5Supported && cycleCount % 4 == 0 && isActive && protocol.isSessionActive) {
-                            delay(50)
+                        // Чередуем вторичные группы (не более 1 доп. группы за цикл) для максимальной частоты опроса
+                        val pollG2Now = g2Supported && (cycleCount % 3 == 0 || lastBatteryV == null || lastInjMs == null)
+                        val pollG5Now = !pollG2Now && g5Supported && (cycleCount % 6 == 3 || lastAdaptPct == null)
+
+                        if (!useGroupZeroOnly && pollG2Now && isActive && protocol.isSessionActive) {
+                            delay(10)
+                            val m2 = protocol.readMeasuringGroup(2) { }
+                            if (m2 != null && !m2.isUnsupportedNak && m2.errorMessage == null) {
+                                gotValid = true
+                                m2.batteryVoltage?.let { lastBatteryV = it }
+                                m2.injectionTimeMs?.let { lastInjMs = it }
+                                m2.intakeAirTemp?.let { lastAirTemp = it }
+                                g2Fields = m2.fields
+                            } else if (m2?.isUnsupportedNak == true) {
+                                g2Supported = false
+                            }
+                        } else if (!useGroupZeroOnly && pollG5Now && isActive && protocol.isSessionActive) {
+                            delay(10)
                             val m5 = protocol.readMeasuringGroup(5) { }
                             if (m5 != null && !m5.isUnsupportedNak && m5.errorMessage == null) {
                                 gotValid = true
                                 m5.coolantTemp?.let { if (lastTemp == null) lastTemp = it }
-                                m5.lambdaVoltage?.let { if (lastLambdaV == null) lastLambdaV = it }
+                                m5.mixtureAdaptationPct?.let { lastAdaptPct = it }
+                                if (!gotG4SwitchThisCycle) {
+                                    m5.idleSwitchClosed?.let { if (lastIdleSwitchClosed == null) lastIdleSwitchClosed = it }
+                                    m5.operatingModeText?.let { if (lastModeText == null) lastModeText = it }
+                                }
                                 g5Fields = m5.fields
                             } else if (m5?.isUnsupportedNak == true) {
                                 g5Supported = false
                             }
                         }
-
-                        if (!useGroupZeroOnly && g2Supported && cycleCount % 4 == 0 && isActive && protocol.isSessionActive) {
-                            delay(50)
-                            val m2 = protocol.readMeasuringGroup(2) { }
-                            if (m2 != null && !m2.isUnsupportedNak && m2.errorMessage == null) {
-                                m2.batteryVoltage?.let { lastBatteryV = it }
-                                m2.injectionTimeMs?.let { lastInjMs = it }
-                                m2.intakeAirTemp?.let { lastAirTemp = it }
-                            } else if (m2?.isUnsupportedNak == true) {
-                                g2Supported = false
-                            }
-                        }
                     }
 
-                    // Фоллбек на Группу 000 (10 байт Mono-Motronic): если Группа 001 отклонена ИЛИ ДТОЖ/Лямбда не удалось прочитать
+                    // Фоллбек на Группу 000 (10 байт Mono-Motronic): если Группа 001 отклонена ИЛИ ДТОЖ/Лямбда отсутствуют
                     val needGroupZeroFallback = useGroupZeroOnly || lastTemp == null || (lastLambdaV == null && lastLambdaCorr == null && lastLambdaFactor == null)
                     if (needGroupZeroFallback && isActive && protocol.isSessionActive) {
-                        delay(50)
+                        delay(10)
                         val m0 = protocol.readMeasuringGroup(0) { }
                         if (m0 != null && m0.errorMessage == null && (m0.rawValues.isNotEmpty() || m0.fields.isNotEmpty())) {
                             gotValid = true
@@ -3251,7 +3660,11 @@ class MainActivity : AppCompatActivity() {
                             m0.lambdaVoltage?.let { if (lastLambdaV == null) lastLambdaV = it }
                             m0.lambdaCorrection?.let { if (lastLambdaCorr == null || useGroupZeroOnly) lastLambdaCorr = it }
                             m0.throttleAngle?.let { if (lastThrottle == null || useGroupZeroOnly) lastThrottle = it }
-                            m0.batteryVoltage?.let { if (lastBatteryV == null) lastBatteryV = it }
+                            m0.batteryVoltage?.let { if (lastBatteryV == null || useGroupZeroOnly) lastBatteryV = it }
+                            m0.intakeAirTemp?.let { if (lastAirTemp == null || useGroupZeroOnly) lastAirTemp = it }
+                            m0.mixtureAdaptationPct?.let { if (lastAdaptPct == null || useGroupZeroOnly) lastAdaptPct = it }
+                            m0.idleSwitchClosed?.let { if (!gotG4SwitchThisCycle && (lastIdleSwitchClosed == null || useGroupZeroOnly)) lastIdleSwitchClosed = it }
+                            m0.operatingModeText?.let { if (lastModeText == null || useGroupZeroOnly) lastModeText = it }
                             g0Raw = m0.rawValues
                         } else if (m0 != null && !gotValid) {
                             lastErr = m0.errorMessage
@@ -3260,7 +3673,24 @@ class MainActivity : AppCompatActivity() {
 
                     if (gotValid) {
                         consecutiveErrors = 0
-                        updateGaugeViews(lastRpm, lastTemp, lastLambdaV, lastLambdaCorr, lastLambdaFactor, lastThrottle)
+                        updateGaugeViews(
+                            rpm = lastRpm,
+                            temp = lastTemp,
+                            lambdaV = lastLambdaV,
+                            lambdaCorr = lastLambdaCorr,
+                            lambdaFactor = lastLambdaFactor,
+                            throttle = lastThrottle,
+                            batteryV = lastBatteryV,
+                            injMs = lastInjMs,
+                            airTemp = lastAirTemp,
+                            timing = lastTiming,
+                            loadPct = lastLoadPct,
+                            speedKmh = lastSpeedKmh,
+                            adaptPct = lastAdaptPct,
+                            idleSwitchClosed = lastIdleSwitchClosed,
+                            modeText = lastModeText,
+                            statusBits = lastStatusBits
+                        )
 
                         val sb = StringBuilder()
                         sb.append(if (useGroupZeroOnly) "ЖИВЫЕ ПАРАМЕТРЫ (ГРУППА 000):\\n" else "ЖИВЫЕ ПАРАМЕТРЫ ДАТЧИКОВ:\\n")
@@ -3274,12 +3704,27 @@ class MainActivity : AppCompatActivity() {
                         }
                         sb.append("• Лямбда-зонд (G39): ").append(lambdaText).append("\\n")
                         sb.append("• ДПДЗ угол (G69): ").append(lastThrottle?.let { "%.1f °".format(it) } ?: "---").append("\\n")
+                        val switchStr = when (lastIdleSwitchClosed) {
+                            true -> "ЗАМКНУТ (Холостой ход)"
+                            false -> "РАЗМКНУТ (Педаль газа нажата)"
+                            null -> "---"
+                        }
+                        sb.append("• Концевик ДЗ (F60): ").append(switchStr)
+                        lastModeText?.let { sb.append(" • Режим: $it") }
+                        sb.append("\\n")
                         lastBatteryV?.let { sb.append("• Напряжение АКБ: %.2f В\\n".format(it)) }
                         lastInjMs?.let { sb.append("• Время впрыска: %.2f мс\\n".format(it)) }
                         lastAirTemp?.let { sb.append("• ДТВВ (G42): $it °C\\n") }
+                        lastTiming?.let { sb.append("• УОЗ: $it\\n") }
+                        lastLoadPct?.let { sb.append("• Нагрузка двигателя: %.1f %%\\n".format(it)) }
+                        lastSpeedKmh?.let { sb.append("• Скорость авто (G68): $it км/ч\\n") }
+                        lastAdaptPct?.let { sb.append("• Адаптация смеси (Гр.005): %.1f %%\\n".format(it)) }
 
                         if (g1Fields.isNotEmpty()) {
                             sb.append("\\nГруппа 001: ").append(g1Fields.joinToString(" | ") { it.valueText })
+                        }
+                        if (g2Fields.isNotEmpty()) {
+                            sb.append("\\nГруппа 002: ").append(g2Fields.joinToString(" | ") { it.valueText })
                         }
                         if (g3Fields.isNotEmpty()) {
                             sb.append("\\nГруппа 003: ").append(g3Fields.joinToString(" | ") { it.valueText })
@@ -3288,7 +3733,7 @@ class MainActivity : AppCompatActivity() {
                             sb.append("\\nГруппа 004: ").append(g4Fields.joinToString(" | ") { it.valueText })
                         }
                         if (g5Fields.isNotEmpty()) {
-                            sb.append("\\nАдаптация (Гр.005): ").append(g5Fields.joinToString(" | ") { it.valueText })
+                            sb.append("\\nГруппа 005: ").append(g5Fields.joinToString(" | ") { it.valueText })
                         }
                         if (g0Raw.isNotEmpty()) {
                             sb.append("\\nБайты 000: ").append(g0Raw.joinToString(" ") { "%03d".format(it) })
@@ -3302,12 +3747,15 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     cycleCount++
-                    delay(180)
+                    delay(10)
                 }
             } catch (t: Throwable) {
                 // Корректное завершение при отмене job
             } finally {
                 liveStreamJob = null
+                if (basicSettingsJob == null) {
+                    protocol.isKeepAlivePaused = false
+                }
                 runOnUiThread {
                     btnMeasuring.text = if (selectedEcuAddress == 0x25) "СТАТУС ИММО (08)" else "ИЗМЕРЕНИЯ (08)"
                     btnMeasuring.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#8B5CF6"))
@@ -3319,6 +3767,9 @@ class MainActivity : AppCompatActivity() {
     private fun stopLiveStream() {
         liveStreamJob?.cancel()
         liveStreamJob = null
+        if (basicSettingsJob == null) {
+            kwProtocol?.isKeepAlivePaused = false
+        }
         runOnUiThread {
             btnMeasuring.text = if (selectedEcuAddress == 0x25) "СТАТУС ИММО (08)" else "ИЗМЕРЕНИЯ (08)"
             btnMeasuring.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#8B5CF6"))
@@ -3331,7 +3782,17 @@ class MainActivity : AppCompatActivity() {
         lambdaV: Double?,
         lambdaCorr: Double?,
         lambdaFactor: Double?,
-        throttle: Double?
+        throttle: Double?,
+        batteryV: Double? = null,
+        injMs: Double? = null,
+        airTemp: Int? = null,
+        timing: String? = null,
+        loadPct: Double? = null,
+        speedKmh: Int? = null,
+        adaptPct: Double? = null,
+        idleSwitchClosed: Boolean? = null,
+        modeText: String? = null,
+        statusBits: String? = null
     ) {
         runOnUiThread {
             rpm?.let { tvGaugeRpm.text = "$it" }
@@ -3347,6 +3808,28 @@ class MainActivity : AppCompatActivity() {
                 tvGaugeLambdaUnit.text = "λ факт."
             }
             throttle?.let { tvGaugeThrottle.text = "%.1f".format(it) }
+            batteryV?.let { tvGaugeBattery.text = "%.2f".format(it) }
+            injMs?.let { tvGaugeInj.text = "%.2f".format(it) }
+            airTemp?.let { tvGaugeAirTemp.text = "$it" }
+            timing?.let { tvGaugeTiming.text = it }
+            loadPct?.let { tvGaugeLoad.text = "%.0f%%".format(it) }
+            speedKmh?.let { tvGaugeSpeed.text = "$it км/ч" }
+            adaptPct?.let { tvGaugeAdapt.text = "%.1f%%".format(it) }
+
+            if (idleSwitchClosed != null || modeText != null || statusBits != null) {
+                val f60Label = when (idleSwitchClosed) {
+                    true -> "✅ ЗАМКНУТ (ХХ)"
+                    false -> "⚡ РАЗОМКНУТ (Газ)"
+                    null -> "---"
+                }
+                val modePart = modeText ?: statusBits ?: "---"
+                tvGaugeIdleSwitch.text = "Концевик ДЗ (F60): $f60Label  •  $modePart"
+                when (idleSwitchClosed) {
+                    true -> tvGaugeIdleSwitch.setTextColor(Color.parseColor("#10B981"))
+                    false -> tvGaugeIdleSwitch.setTextColor(Color.parseColor("#F59E0B"))
+                    null -> tvGaugeIdleSwitch.setTextColor(Color.parseColor("#94A3B8"))
+                }
+            }
         }
     }
 
@@ -3464,7 +3947,24 @@ class MainActivity : AppCompatActivity() {
 
                     val m = res.measurement
                     if (m != null) {
-                        updateGaugeViews(m.rpm, m.coolantTemp, m.lambdaVoltage, m.lambdaCorrection, m.lambdaFactor, m.throttleAngle)
+                        updateGaugeViews(
+                            rpm = m.rpm,
+                            temp = m.coolantTemp,
+                            lambdaV = m.lambdaVoltage,
+                            lambdaCorr = m.lambdaCorrection,
+                            lambdaFactor = m.lambdaFactor,
+                            throttle = m.throttleAngle,
+                            batteryV = m.batteryVoltage,
+                            injMs = m.injectionTimeMs,
+                            airTemp = m.intakeAirTemp,
+                            timing = m.ignitionTiming,
+                            loadPct = m.engineLoadPct,
+                            speedKmh = m.vehicleSpeedKmh,
+                            adaptPct = m.mixtureAdaptationPct,
+                            idleSwitchClosed = m.idleSwitchClosed,
+                            modeText = m.operatingModeText,
+                            statusBits = m.rawStatusBits
+                        )
                     }
 
                     val extraLine = when {

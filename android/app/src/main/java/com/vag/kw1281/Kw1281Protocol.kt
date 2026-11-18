@@ -69,6 +69,13 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val batteryVoltage: Double? = null,
         val intakeAirTemp: Int? = null,
         val injectionTimeMs: Double? = null,
+        val ignitionTiming: String? = null,
+        val engineLoadPct: Double? = null,
+        val vehicleSpeedKmh: Int? = null,
+        val mixtureAdaptationPct: Double? = null,
+        val idleSwitchClosed: Boolean? = null,
+        val operatingModeText: String? = null,
+        val rawStatusBits: String? = null,
         val rawValues: List<Int> = emptyList(),
         val fields: List<MeasuredField> = emptyList(),
         val isUnsupportedNak: Boolean = false,
@@ -380,17 +387,14 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         val len = driver.readByte(timeoutMs)
         if (len < 3 || len > 32) return null
         sendByteAck(len)
-        delay(2)
 
         val counter = driver.readByte(400)
         if (counter < 0) return null
         sendByteAck(counter)
-        delay(2)
 
         val title = driver.readByte(400)
         if (title < 0) return null
         sendByteAck(title)
-        delay(2)
 
         val dataLen = len - 3
         val data = ByteArray(dataLen)
@@ -399,12 +403,11 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             if (d < 0) return null
             data[i] = d.toByte()
             sendByteAck(d)
-            delay(2)
         }
 
         // Конец блока 0x03 (не подтверждается инверсией)
         driver.readByte(400)
-        delay(6)
+        delay(5)
 
         blockCounter = counter
         return KwBlock(len, counter, title, data)
@@ -1058,19 +1061,29 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             val throttleRaw = raw[1]
             val rpmRaw = raw[2]
             val lambdaRaw = raw[4]
+            val adaptIdleRaw = raw[5]
             val batteryRaw = raw[8]
+            val airTempRaw = raw[9]
 
-            // На Mono-Motronic 1.2.3 ДТОЖ в группе 000 может быть прямым (>=60 при прогреве) или инверсным NTC (<=45 при 85-100°C)
+            // На Mono-Motronic 1.2.3 ДТОЖ/ДТВВ в группе 000 может быть прямым (>=60 при прогреве) или инверсным NTC
             val coolantC = if (coolantRaw > 60) {
                 (coolantRaw * 0.65 - 30.0).toInt()
             } else {
                 (115.0 - coolantRaw * 1.4).toInt()
             }
+            val airTempC = if (airTempRaw > 60) {
+                (airTempRaw * 0.65 - 30.0).toInt()
+            } else {
+                (115.0 - airTempRaw * 1.4).toInt()
+            }
             val rpm = rpmRaw * 25
             // Окно 5 в группе 000 Mono-Motronic — интегратор лямбда-регулирования (центр 128 = 0%)
             val lambdaCorr = ((lambdaRaw - 128) * 100.0 / 128.0).let { "%.1f".format(it).replace(',', '.').toDoubleOrNull() }
+            val adaptPct = ((adaptIdleRaw - 128) * 100.0 / 128.0).let { "%.1f".format(it).replace(',', '.').toDoubleOrNull() }
             val throttleAngle = (throttleRaw * 0.35).let { "%.1f".format(it).replace(',', '.').toDoubleOrNull() }
             val batteryV = (batteryRaw * 0.08).let { "%.1f".format(it).replace(',', '.').toDoubleOrNull() }
+            val idleClosed = throttleRaw <= 12
+            val modeText = if (idleClosed) "Холостой ход (по Гр.000)" else "Нагрузка (газ нажат)"
 
             val fields = raw.mapIndexed { i, v ->
                 MeasuredField(i + 1, "%03d".format(v), 0, 0, v, v.toDouble())
@@ -1083,6 +1096,10 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                 lambdaCorrection = lambdaCorr,
                 throttleAngle = throttleAngle,
                 batteryVoltage = batteryV,
+                intakeAirTemp = airTempC,
+                mixtureAdaptationPct = adaptPct,
+                idleSwitchClosed = idleClosed,
+                operatingModeText = modeText,
                 rawValues = raw,
                 fields = fields
             )
@@ -1098,6 +1115,13 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
         var parsedThrottle: Double? = null
         var parsedBatteryV: Double? = null
         var parsedInjMs: Double? = null
+        var parsedTiming: String? = null
+        var parsedLoadPct: Double? = null
+        var parsedSpeedKmh: Int? = null
+        var parsedMixtureAdaptPct: Double? = null
+        var parsedIdleSwitchClosed: Boolean? = null
+        var parsedModeText: String? = null
+        var parsedStatusBits: String? = null
 
         val fields = mutableListOf<MeasuredField>()
         var idx = 0
@@ -1132,7 +1156,11 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     }
                 }
                 FieldKind.LAMBDA_PCT -> {
-                    if (group != 5) {
+                    if (group == 5) {
+                        if (itemNum == 3 || parsedMixtureAdaptPct == null) {
+                            parsedMixtureAdaptPct = decoded.numeric
+                        }
+                    } else {
                         parsedLambdaCorr = decoded.numeric
                     }
                 }
@@ -1142,15 +1170,61 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
                     }
                 }
                 FieldKind.ANGLE -> {
-                    // В группе 3 поле 3 — угол открытия дроссельной заслонки (ДПДЗ G69)
-                    if (group == 3 || parsedThrottle == null) {
+                    // В группе 3 поле 3 — угол ДПДЗ (G69), а поле 4 может быть УОЗ!
+                    if (group == 3 && itemNum == 4) {
+                        if (parsedTiming == null) parsedTiming = "%.1f°".format(decoded.numeric)
+                    } else if (itemNum == 3 || (group != 3 && parsedThrottle == null)) {
                         parsedThrottle = decoded.numeric
                     }
                 }
+                FieldKind.TIMING -> {
+                    parsedTiming = decoded.displayText
+                }
                 FieldKind.LOAD_PCT -> {
-                    // LOAD_PCT (формулы 0x02/0x17/0x21) — это нагрузка/скважность/адаптация, не подменяем им лямбду!
+                    if (group == 3 || group == 4) {
+                        if (parsedLoadPct == null) parsedLoadPct = decoded.numeric
+                    } else if (group == 5) {
+                        if (itemNum == 3 || parsedMixtureAdaptPct == null) {
+                            parsedMixtureAdaptPct = decoded.numeric
+                        }
+                    }
                 }
                 FieldKind.INJ_MS -> parsedInjMs = decoded.numeric
+                FieldKind.SPEED -> parsedSpeedKmh = decoded.numeric.toInt()
+                FieldKind.BITS -> {
+                    parsedStatusBits = decoded.displayText
+                    if ((group == 4 || group == 5) && itemNum == 4) {
+                        when {
+                            (b and 0x02) != 0 -> {
+                                parsedIdleSwitchClosed = true
+                                parsedModeText = "Холостой ход (ХХ)"
+                            }
+                            (b and 0x01) != 0 -> {
+                                parsedIdleSwitchClosed = true
+                                parsedModeText = "ПХХ (Отсечка)"
+                            }
+                            (b and 0x08) != 0 -> {
+                                parsedIdleSwitchClosed = false
+                                parsedModeText = "Полная нагрузка"
+                            }
+                            (b and 0x04) != 0 -> {
+                                parsedIdleSwitchClosed = false
+                                parsedModeText = "Частичная нагрузка"
+                            }
+                            (b and 0x10) != 0 -> {
+                                parsedIdleSwitchClosed = false
+                                parsedModeText = "Обогащение (уск.)"
+                            }
+                            else -> {
+                                parsedIdleSwitchClosed = false
+                                parsedModeText = "Активен"
+                            }
+                        }
+                    } else if (group == 1 && itemNum == 4 && parsedIdleSwitchClosed == null) {
+                        // В группе 001 поле 4 бит 3 (0x08): 0 = концевик ХХ F60 замкнут, 1 = дроссель приоткрыт
+                        parsedIdleSwitchClosed = (b and 0x08) == 0
+                    }
+                }
                 else -> {
                     // Запасная интерпретация по стандартной позиции поля Группы 001,
                     // если ЭБУ прислал нестандартный код формулы
@@ -1177,13 +1251,20 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             batteryVoltage = parsedBatteryV,
             intakeAirTemp = parsedAirTemp,
             injectionTimeMs = parsedInjMs,
+            ignitionTiming = parsedTiming,
+            engineLoadPct = parsedLoadPct,
+            vehicleSpeedKmh = parsedSpeedKmh,
+            mixtureAdaptationPct = parsedMixtureAdaptPct,
+            idleSwitchClosed = parsedIdleSwitchClosed,
+            operatingModeText = parsedModeText,
+            rawStatusBits = parsedStatusBits,
             rawValues = raw,
             fields = fields
         )
     }
 
     private enum class FieldKind {
-        RPM, TEMP, VOLTAGE, LAMBDA_PCT, LAMBDA_FACTOR, ANGLE, LOAD_PCT, INJ_MS, SPEED, BITS, OTHER
+        RPM, TEMP, VOLTAGE, LAMBDA_PCT, LAMBDA_FACTOR, ANGLE, TIMING, LOAD_PCT, INJ_MS, SPEED, BITS, OTHER
     }
 
     private data class DecodedFormula(
@@ -1209,7 +1290,7 @@ class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
             0x04 -> {
                 val v = abs(b - 127) * 0.01 * a
                 val dir = if (b < 127) "до ВМТ" else "после ВМТ"
-                DecodedFormula(v, "%.1f° $dir".format(v), FieldKind.OTHER)
+                DecodedFormula(v, "%.1f° $dir".format(v), FieldKind.TIMING)
             }
             0x05 -> {
                 val v = a * (b - 100) * 0.1

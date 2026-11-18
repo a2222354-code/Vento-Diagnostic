@@ -68,9 +68,9 @@ class Ftdi5BaudDriver(
             // Устанавливаем режим UART 8N1 и активные DTR/RTS
             setUartMode(baud)
 
-            // Снижаем FTDI Latency Timer до 2 мс для мгновенного отклика K-Line
+            // Снижаем FTDI Latency Timer до 1 мс для минимальной задержки K-Line при опросе датчиков
             try {
-                connection?.controlTransfer(0x40, 0x09, 2, 1, null, 0, 100)
+                connection?.controlTransfer(0x40, 0x09, 1, 1, null, 0, 100)
             } catch (t: Throwable) {}
 
             // Первичная очистка буферов
@@ -222,7 +222,7 @@ class Ftdi5BaudDriver(
         while (true) {
             val remaining = (timeoutMs - (System.currentTimeMillis() - start)).toInt()
             if (remaining <= 0) break
-            val slice = remaining.coerceIn(5, 30)
+            val slice = remaining.coerceIn(2, 20)
 
             try {
                 val readLen = p.read(tempBuf, slice)
@@ -278,7 +278,7 @@ class Ftdi5BaudDriver(
 
                 // 2. Проверяем, является ли байт побитовой инверсией (~byte)
                 if (rx == compExpected) {
-                    delay(3) // Межбайтная пауза ~3 мс по спецификации KWP1281
+                    delay(2) // Межбайтная пауза ~2-3 мс по спецификации KWP1281
                     return@withContext true
                 }
 
@@ -287,7 +287,7 @@ class Ftdi5BaudDriver(
                     continue
                 }
             }
-            delay(5)
+            delay(4)
         }
         return@withContext false
     }
@@ -301,11 +301,11 @@ class Ftdi5BaudDriver(
         val p = port ?: return@withContext
         try {
             p.write(byteArrayOf(0x03), timeoutMs)
-            val rx = readByte(35)
+            val rx = readByte(25)
             if (rx >= 0 && rx != 0x03) {
                 unreadByte(rx)
             }
-            delay(6) // Межблочная пауза ~5–8 мс по спецификации KWP1281
+            delay(5) // Межблочная пауза ~5–8 мс по спецификации KWP1281
         } catch (t: Throwable) {}
     }
 
@@ -318,7 +318,7 @@ class Ftdi5BaudDriver(
         val sentVal = b.toInt() and 0xFF
         try {
             p.write(byteArrayOf(b), timeoutMs)
-            val rx = readByte(35)
+            val rx = readByte(25)
             if (rx >= 0 && rx != sentVal) {
                 unreadByte(rx)
             }

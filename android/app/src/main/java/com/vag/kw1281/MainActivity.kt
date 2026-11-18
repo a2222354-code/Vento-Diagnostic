@@ -51,6 +51,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvGaugeLambda: TextView
     private lateinit var tvGaugeLambdaUnit: TextView
     private lateinit var tvGaugeThrottle: TextView
+    private lateinit var tvGaugeBattery: TextView
+    private lateinit var tvGaugeInj: TextView
+    private lateinit var tvGaugeAirTemp: TextView
+    private lateinit var tvGaugeTiming: TextView
+    private lateinit var tvGaugeLoad: TextView
+    private lateinit var tvGaugeSpeed: TextView
+    private lateinit var tvGaugeAdapt: TextView
+    private lateinit var tvGaugeIdleSwitch: TextView
 
     // Панель иммобилайзера (Immo)
     private lateinit var layoutImmoStatus: LinearLayout
@@ -161,6 +169,14 @@ class MainActivity : AppCompatActivity() {
             tvGaugeLambda = findViewById(R.id.tvGaugeLambda)
             tvGaugeLambdaUnit = findViewById(R.id.tvGaugeLambdaUnit)
             tvGaugeThrottle = findViewById(R.id.tvGaugeThrottle)
+            tvGaugeBattery = findViewById(R.id.tvGaugeBattery)
+            tvGaugeInj = findViewById(R.id.tvGaugeInj)
+            tvGaugeAirTemp = findViewById(R.id.tvGaugeAirTemp)
+            tvGaugeTiming = findViewById(R.id.tvGaugeTiming)
+            tvGaugeLoad = findViewById(R.id.tvGaugeLoad)
+            tvGaugeSpeed = findViewById(R.id.tvGaugeSpeed)
+            tvGaugeAdapt = findViewById(R.id.tvGaugeAdapt)
+            tvGaugeIdleSwitch = findViewById(R.id.tvGaugeIdleSwitch)
 
             layoutImmoStatus = findViewById(R.id.layoutImmoStatus)
             tvImmoKeyStatus = findViewById(R.id.tvImmoKeyStatus)
@@ -302,6 +318,15 @@ class MainActivity : AppCompatActivity() {
         tvGaugeLambda.text = "---"
         tvGaugeLambdaUnit.text = "Вольт"
         tvGaugeThrottle.text = "---"
+        tvGaugeBattery.text = "---"
+        tvGaugeInj.text = "---"
+        tvGaugeAirTemp.text = "---"
+        tvGaugeTiming.text = "---"
+        tvGaugeLoad.text = "---"
+        tvGaugeSpeed.text = "---"
+        tvGaugeAdapt.text = "---"
+        tvGaugeIdleSwitch.text = "Концевик ДЗ (F60): ---  •  Режим: ---"
+        tvGaugeIdleSwitch.setTextColor(Color.parseColor("#94A3B8"))
     }
 
     private fun setResultText(msg: String) {
@@ -606,7 +631,10 @@ class MainActivity : AppCompatActivity() {
         layoutActuatorTest.visibility = View.GONE
         btnMeasuring.text = "СТОП (08)"
         btnMeasuring.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#DC2626"))
-        setResultText("Опрос живых параметров датчиков (Группы 001 и 003 / 000)...")
+        setResultText("Скоростной опрос всех датчиков ЭБУ (Группы 001, 003, 004 + 002/005)...")
+
+        // Пауза фонового keep-alive 0x09 ускоряет опрос и исключает конкуренцию за busMutex
+        protocol.isKeepAlivePaused = true
 
         liveStreamJob = lifecycleScope.launch {
             var useGroupZeroOnly = false
@@ -626,16 +654,25 @@ class MainActivity : AppCompatActivity() {
             var lastAirTemp: Int? = null
             var lastBatteryV: Double? = null
             var lastInjMs: Double? = null
+            var lastTiming: String? = null
+            var lastLoadPct: Double? = null
+            var lastSpeedKmh: Int? = null
+            var lastAdaptPct: Double? = null
+            var lastIdleSwitchClosed: Boolean? = null
+            var lastModeText: String? = null
+            var lastStatusBits: String? = null
 
             try {
                 while (isActive && protocol.isSessionActive) {
                     var gotValid = false
                     var lastErr: String? = null
                     var g1Fields = emptyList<Kw1281Protocol.MeasuredField>()
+                    var g2Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g3Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g4Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g5Fields = emptyList<Kw1281Protocol.MeasuredField>()
                     var g0Raw = emptyList<Int>()
+                    var gotG4SwitchThisCycle = false
 
                     if (!useGroupZeroOnly) {
                         val m1 = protocol.readMeasuringGroup(1) { }
@@ -649,6 +686,10 @@ class MainActivity : AppCompatActivity() {
                                 m1.lambdaVoltage?.let { lastLambdaV = it }
                                 m1.lambdaCorrection?.let { lastLambdaCorr = it }
                                 m1.lambdaFactor?.let { lastLambdaFactor = it }
+                                if (m1.idleSwitchClosed != null && (!g4Supported || lastIdleSwitchClosed == null)) {
+                                    lastIdleSwitchClosed = m1.idleSwitchClosed
+                                }
+                                m1.rawStatusBits?.let { if (!g4Supported || lastStatusBits == null) lastStatusBits = it }
                                 g1Fields = m1.fields
                             } else {
                                 lastErr = m1.errorMessage
@@ -656,65 +697,83 @@ class MainActivity : AppCompatActivity() {
                         }
 
                         if (!useGroupZeroOnly && g3Supported && isActive && protocol.isSessionActive) {
-                            delay(50)
+                            delay(10)
                             val m3 = protocol.readMeasuringGroup(3) { }
                             if (m3 != null && !m3.isUnsupportedNak && m3.errorMessage == null) {
                                 gotValid = true
-                                m3.rpm?.let { if (lastRpm == null) lastRpm = it }
+                                m3.rpm?.let { lastRpm = it }
                                 m3.coolantTemp?.let { if (lastTemp == null) lastTemp = it }
                                 m3.throttleAngle?.let { lastThrottle = it }
-                                m3.intakeAirTemp?.let { lastAirTemp = it }
+                                m3.engineLoadPct?.let { lastLoadPct = it }
+                                m3.ignitionTiming?.let { lastTiming = it }
+                                m3.intakeAirTemp?.let { if (lastAirTemp == null) lastAirTemp = it }
                                 g3Fields = m3.fields
                             } else if (m3?.isUnsupportedNak == true) {
                                 g3Supported = false
                             }
                         }
 
-                        // Если ДТОЖ не получен из Группы 001 — добираем из Группы 004
-                        if (!useGroupZeroOnly && g4Supported && (lastTemp == null || cycleCount == 0) && isActive && protocol.isSessionActive) {
-                            delay(50)
+                        // Группа 004: концевик ДЗ (F60), режим работы, нагрузка, скорость или ДТОЖ
+                        if (!useGroupZeroOnly && g4Supported && isActive && protocol.isSessionActive) {
+                            delay(10)
                             val m4 = protocol.readMeasuringGroup(4) { }
                             if (m4 != null && !m4.isUnsupportedNak && m4.errorMessage == null) {
                                 gotValid = true
-                                m4.coolantTemp?.let { lastTemp = it }
+                                m4.rpm?.let { if (lastRpm == null) lastRpm = it }
+                                m4.coolantTemp?.let { if (lastTemp == null) lastTemp = it }
                                 m4.intakeAirTemp?.let { if (lastAirTemp == null) lastAirTemp = it }
+                                m4.engineLoadPct?.let { if (lastLoadPct == null) lastLoadPct = it }
+                                m4.vehicleSpeedKmh?.let { lastSpeedKmh = it }
+                                m4.idleSwitchClosed?.let {
+                                    lastIdleSwitchClosed = it
+                                    gotG4SwitchThisCycle = true
+                                }
+                                m4.operatingModeText?.let { lastModeText = it }
+                                m4.rawStatusBits?.let { lastStatusBits = it }
                                 g4Fields = m4.fields
                             } else if (m4?.isUnsupportedNak == true) {
                                 g4Supported = false
                             }
                         }
 
-                        // Группа 005 на Mono-Motronic содержит адаптацию смеси (не подменяет лямбда-коррекцию из Гр. 001!)
-                        if (!useGroupZeroOnly && g5Supported && cycleCount % 4 == 0 && isActive && protocol.isSessionActive) {
-                            delay(50)
+                        // Чередуем вторичные группы (не более 1 доп. группы за цикл) для максимальной частоты опроса
+                        val pollG2Now = g2Supported && (cycleCount % 3 == 0 || lastBatteryV == null || lastInjMs == null)
+                        val pollG5Now = !pollG2Now && g5Supported && (cycleCount % 6 == 3 || lastAdaptPct == null)
+
+                        if (!useGroupZeroOnly && pollG2Now && isActive && protocol.isSessionActive) {
+                            delay(10)
+                            val m2 = protocol.readMeasuringGroup(2) { }
+                            if (m2 != null && !m2.isUnsupportedNak && m2.errorMessage == null) {
+                                gotValid = true
+                                m2.batteryVoltage?.let { lastBatteryV = it }
+                                m2.injectionTimeMs?.let { lastInjMs = it }
+                                m2.intakeAirTemp?.let { lastAirTemp = it }
+                                g2Fields = m2.fields
+                            } else if (m2?.isUnsupportedNak == true) {
+                                g2Supported = false
+                            }
+                        } else if (!useGroupZeroOnly && pollG5Now && isActive && protocol.isSessionActive) {
+                            delay(10)
                             val m5 = protocol.readMeasuringGroup(5) { }
                             if (m5 != null && !m5.isUnsupportedNak && m5.errorMessage == null) {
                                 gotValid = true
                                 m5.coolantTemp?.let { if (lastTemp == null) lastTemp = it }
-                                m5.lambdaVoltage?.let { if (lastLambdaV == null) lastLambdaV = it }
+                                m5.mixtureAdaptationPct?.let { lastAdaptPct = it }
+                                if (!gotG4SwitchThisCycle) {
+                                    m5.idleSwitchClosed?.let { if (lastIdleSwitchClosed == null) lastIdleSwitchClosed = it }
+                                    m5.operatingModeText?.let { if (lastModeText == null) lastModeText = it }
+                                }
                                 g5Fields = m5.fields
                             } else if (m5?.isUnsupportedNak == true) {
                                 g5Supported = false
                             }
                         }
-
-                        if (!useGroupZeroOnly && g2Supported && cycleCount % 4 == 0 && isActive && protocol.isSessionActive) {
-                            delay(50)
-                            val m2 = protocol.readMeasuringGroup(2) { }
-                            if (m2 != null && !m2.isUnsupportedNak && m2.errorMessage == null) {
-                                m2.batteryVoltage?.let { lastBatteryV = it }
-                                m2.injectionTimeMs?.let { lastInjMs = it }
-                                m2.intakeAirTemp?.let { lastAirTemp = it }
-                            } else if (m2?.isUnsupportedNak == true) {
-                                g2Supported = false
-                            }
-                        }
                     }
 
-                    // Фоллбек на Группу 000 (10 байт Mono-Motronic): если Группа 001 отклонена ИЛИ ДТОЖ/Лямбда не удалось прочитать
+                    // Фоллбек на Группу 000 (10 байт Mono-Motronic): если Группа 001 отклонена ИЛИ ДТОЖ/Лямбда отсутствуют
                     val needGroupZeroFallback = useGroupZeroOnly || lastTemp == null || (lastLambdaV == null && lastLambdaCorr == null && lastLambdaFactor == null)
                     if (needGroupZeroFallback && isActive && protocol.isSessionActive) {
-                        delay(50)
+                        delay(10)
                         val m0 = protocol.readMeasuringGroup(0) { }
                         if (m0 != null && m0.errorMessage == null && (m0.rawValues.isNotEmpty() || m0.fields.isNotEmpty())) {
                             gotValid = true
@@ -723,7 +782,11 @@ class MainActivity : AppCompatActivity() {
                             m0.lambdaVoltage?.let { if (lastLambdaV == null) lastLambdaV = it }
                             m0.lambdaCorrection?.let { if (lastLambdaCorr == null || useGroupZeroOnly) lastLambdaCorr = it }
                             m0.throttleAngle?.let { if (lastThrottle == null || useGroupZeroOnly) lastThrottle = it }
-                            m0.batteryVoltage?.let { if (lastBatteryV == null) lastBatteryV = it }
+                            m0.batteryVoltage?.let { if (lastBatteryV == null || useGroupZeroOnly) lastBatteryV = it }
+                            m0.intakeAirTemp?.let { if (lastAirTemp == null || useGroupZeroOnly) lastAirTemp = it }
+                            m0.mixtureAdaptationPct?.let { if (lastAdaptPct == null || useGroupZeroOnly) lastAdaptPct = it }
+                            m0.idleSwitchClosed?.let { if (!gotG4SwitchThisCycle && (lastIdleSwitchClosed == null || useGroupZeroOnly)) lastIdleSwitchClosed = it }
+                            m0.operatingModeText?.let { if (lastModeText == null || useGroupZeroOnly) lastModeText = it }
                             g0Raw = m0.rawValues
                         } else if (m0 != null && !gotValid) {
                             lastErr = m0.errorMessage
@@ -732,7 +795,24 @@ class MainActivity : AppCompatActivity() {
 
                     if (gotValid) {
                         consecutiveErrors = 0
-                        updateGaugeViews(lastRpm, lastTemp, lastLambdaV, lastLambdaCorr, lastLambdaFactor, lastThrottle)
+                        updateGaugeViews(
+                            rpm = lastRpm,
+                            temp = lastTemp,
+                            lambdaV = lastLambdaV,
+                            lambdaCorr = lastLambdaCorr,
+                            lambdaFactor = lastLambdaFactor,
+                            throttle = lastThrottle,
+                            batteryV = lastBatteryV,
+                            injMs = lastInjMs,
+                            airTemp = lastAirTemp,
+                            timing = lastTiming,
+                            loadPct = lastLoadPct,
+                            speedKmh = lastSpeedKmh,
+                            adaptPct = lastAdaptPct,
+                            idleSwitchClosed = lastIdleSwitchClosed,
+                            modeText = lastModeText,
+                            statusBits = lastStatusBits
+                        )
 
                         val sb = StringBuilder()
                         sb.append(if (useGroupZeroOnly) "ЖИВЫЕ ПАРАМЕТРЫ (ГРУППА 000):\n" else "ЖИВЫЕ ПАРАМЕТРЫ ДАТЧИКОВ:\n")
@@ -746,12 +826,27 @@ class MainActivity : AppCompatActivity() {
                         }
                         sb.append("• Лямбда-зонд (G39): ").append(lambdaText).append("\n")
                         sb.append("• ДПДЗ угол (G69): ").append(lastThrottle?.let { "%.1f °".format(it) } ?: "---").append("\n")
+                        val switchStr = when (lastIdleSwitchClosed) {
+                            true -> "ЗАМКНУТ (Холостой ход)"
+                            false -> "РАЗМКНУТ (Педаль газа нажата)"
+                            null -> "---"
+                        }
+                        sb.append("• Концевик ДЗ (F60): ").append(switchStr)
+                        lastModeText?.let { sb.append(" • Режим: $it") }
+                        sb.append("\n")
                         lastBatteryV?.let { sb.append("• Напряжение АКБ: %.2f В\n".format(it)) }
                         lastInjMs?.let { sb.append("• Время впрыска: %.2f мс\n".format(it)) }
                         lastAirTemp?.let { sb.append("• ДТВВ (G42): $it °C\n") }
+                        lastTiming?.let { sb.append("• УОЗ: $it\n") }
+                        lastLoadPct?.let { sb.append("• Нагрузка двигателя: %.1f %%\n".format(it)) }
+                        lastSpeedKmh?.let { sb.append("• Скорость авто (G68): $it км/ч\n") }
+                        lastAdaptPct?.let { sb.append("• Адаптация смеси (Гр.005): %.1f %%\n".format(it)) }
 
                         if (g1Fields.isNotEmpty()) {
                             sb.append("\nГруппа 001: ").append(g1Fields.joinToString(" | ") { it.valueText })
+                        }
+                        if (g2Fields.isNotEmpty()) {
+                            sb.append("\nГруппа 002: ").append(g2Fields.joinToString(" | ") { it.valueText })
                         }
                         if (g3Fields.isNotEmpty()) {
                             sb.append("\nГруппа 003: ").append(g3Fields.joinToString(" | ") { it.valueText })
@@ -760,7 +855,7 @@ class MainActivity : AppCompatActivity() {
                             sb.append("\nГруппа 004: ").append(g4Fields.joinToString(" | ") { it.valueText })
                         }
                         if (g5Fields.isNotEmpty()) {
-                            sb.append("\nАдаптация (Гр.005): ").append(g5Fields.joinToString(" | ") { it.valueText })
+                            sb.append("\nГруппа 005: ").append(g5Fields.joinToString(" | ") { it.valueText })
                         }
                         if (g0Raw.isNotEmpty()) {
                             sb.append("\nБайты 000: ").append(g0Raw.joinToString(" ") { "%03d".format(it) })
@@ -774,12 +869,15 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     cycleCount++
-                    delay(180)
+                    delay(10)
                 }
             } catch (t: Throwable) {
                 // Корректное завершение при отмене job
             } finally {
                 liveStreamJob = null
+                if (basicSettingsJob == null) {
+                    protocol.isKeepAlivePaused = false
+                }
                 runOnUiThread {
                     btnMeasuring.text = if (selectedEcuAddress == 0x25) "СТАТУС ИММО (08)" else "ИЗМЕРЕНИЯ (08)"
                     btnMeasuring.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#8B5CF6"))
@@ -791,6 +889,9 @@ class MainActivity : AppCompatActivity() {
     private fun stopLiveStream() {
         liveStreamJob?.cancel()
         liveStreamJob = null
+        if (basicSettingsJob == null) {
+            kwProtocol?.isKeepAlivePaused = false
+        }
         runOnUiThread {
             btnMeasuring.text = if (selectedEcuAddress == 0x25) "СТАТУС ИММО (08)" else "ИЗМЕРЕНИЯ (08)"
             btnMeasuring.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#8B5CF6"))
@@ -803,7 +904,17 @@ class MainActivity : AppCompatActivity() {
         lambdaV: Double?,
         lambdaCorr: Double?,
         lambdaFactor: Double?,
-        throttle: Double?
+        throttle: Double?,
+        batteryV: Double? = null,
+        injMs: Double? = null,
+        airTemp: Int? = null,
+        timing: String? = null,
+        loadPct: Double? = null,
+        speedKmh: Int? = null,
+        adaptPct: Double? = null,
+        idleSwitchClosed: Boolean? = null,
+        modeText: String? = null,
+        statusBits: String? = null
     ) {
         runOnUiThread {
             rpm?.let { tvGaugeRpm.text = "$it" }
@@ -819,6 +930,28 @@ class MainActivity : AppCompatActivity() {
                 tvGaugeLambdaUnit.text = "λ факт."
             }
             throttle?.let { tvGaugeThrottle.text = "%.1f".format(it) }
+            batteryV?.let { tvGaugeBattery.text = "%.2f".format(it) }
+            injMs?.let { tvGaugeInj.text = "%.2f".format(it) }
+            airTemp?.let { tvGaugeAirTemp.text = "$it" }
+            timing?.let { tvGaugeTiming.text = it }
+            loadPct?.let { tvGaugeLoad.text = "%.0f%%".format(it) }
+            speedKmh?.let { tvGaugeSpeed.text = "$it км/ч" }
+            adaptPct?.let { tvGaugeAdapt.text = "%.1f%%".format(it) }
+
+            if (idleSwitchClosed != null || modeText != null || statusBits != null) {
+                val f60Label = when (idleSwitchClosed) {
+                    true -> "✅ ЗАМКНУТ (ХХ)"
+                    false -> "⚡ РАЗОМКНУТ (Газ)"
+                    null -> "---"
+                }
+                val modePart = modeText ?: statusBits ?: "---"
+                tvGaugeIdleSwitch.text = "Концевик ДЗ (F60): $f60Label  •  $modePart"
+                when (idleSwitchClosed) {
+                    true -> tvGaugeIdleSwitch.setTextColor(Color.parseColor("#10B981"))
+                    false -> tvGaugeIdleSwitch.setTextColor(Color.parseColor("#F59E0B"))
+                    null -> tvGaugeIdleSwitch.setTextColor(Color.parseColor("#94A3B8"))
+                }
+            }
         }
     }
 
@@ -936,7 +1069,24 @@ class MainActivity : AppCompatActivity() {
 
                     val m = res.measurement
                     if (m != null) {
-                        updateGaugeViews(m.rpm, m.coolantTemp, m.lambdaVoltage, m.lambdaCorrection, m.lambdaFactor, m.throttleAngle)
+                        updateGaugeViews(
+                            rpm = m.rpm,
+                            temp = m.coolantTemp,
+                            lambdaV = m.lambdaVoltage,
+                            lambdaCorr = m.lambdaCorrection,
+                            lambdaFactor = m.lambdaFactor,
+                            throttle = m.throttleAngle,
+                            batteryV = m.batteryVoltage,
+                            injMs = m.injectionTimeMs,
+                            airTemp = m.intakeAirTemp,
+                            timing = m.ignitionTiming,
+                            loadPct = m.engineLoadPct,
+                            speedKmh = m.vehicleSpeedKmh,
+                            adaptPct = m.mixtureAdaptationPct,
+                            idleSwitchClosed = m.idleSwitchClosed,
+                            modeText = m.operatingModeText,
+                            statusBits = m.rawStatusBits
+                        )
                     }
 
                     val extraLine = when {
