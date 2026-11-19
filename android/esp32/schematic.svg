@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 740" width="1120" height="740" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace">
+  <defs>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#38BDF8" />
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10B981" />
+    </marker>
+    <marker id="arrowAmber" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#F59E0B" />
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1120" height="740" fill="#090D16" rx="12" />
+  <rect x="16" y="16" width="1088" height="708" fill="none" stroke="#1E293B" stroke-width="2" rx="10" />
+
+  <!-- Title -->
+  <text x="560" y="52" text-anchor="middle" fill="#38BDF8" font-size="20" font-weight="bold">СХЕМА ПОДКЛЮЧЕНИЯ: ESP32-S3 WI-FI МОСТ ↔ USB KKL КАБЕЛЬ ↔ VW VENTO 1995</text>
+  <text x="560" y="74" text-anchor="middle" fill="#94A3B8" font-size="13">Нативный USB Host (GPIO19 D- / GPIO20 D+) • Питание шины USB +5В • Точка доступа VENTO-KKL-WIFI (192.168.4.1:3333)</text>
+
+  <!-- BLOCK 1: PHONE -->
+  <rect x="40" y="115" width="220" height="220" rx="12" fill="#0F172A" stroke="#38BDF8" stroke-width="2" />
+  <text x="150" y="145" text-anchor="middle" fill="#38BDF8" font-size="15" font-weight="bold">СМАРТФОН ANDROID</text>
+  <text x="150" y="166" text-anchor="middle" fill="#CBD5E1" font-size="12">Приложение:</text>
+  <text x="150" y="184" text-anchor="middle" fill="#FFFFFF" font-size="13" font-weight="bold">Vento Diagnostic</text>
+  <rect x="58" y="202" width="184" height="76" rx="8" fill="#1E293B" stroke="#334155" />
+  <text x="150" y="224" text-anchor="middle" fill="#2DD4BF" font-size="12" font-weight="bold">Режим: WI-FI (ESP32)</text>
+  <text x="150" y="244" text-anchor="middle" fill="#E2E8F0" font-size="11">SSID: VENTO-KKL-WIFI</text>
+  <text x="150" y="262" text-anchor="middle" fill="#E2E8F0" font-size="11">TCP: 192.168.4.1 : 3333</text>
+  <text x="150" y="314" text-anchor="middle" fill="#94A3B8" font-size="11">Протокол KWP1281 поверх TCP</text>
+
+  <!-- WIFI LINK -->
+  <line x1="264" y1="225" x2="352" y2="225" stroke="#38BDF8" stroke-width="3" stroke-dasharray="6,5" marker-end="url(#arrowBlue)" />
+  <text x="308" y="210" text-anchor="middle" fill="#38BDF8" font-size="12" font-weight="bold">Wi-Fi</text>
+  <text x="308" y="246" text-anchor="middle" fill="#94A3B8" font-size="11">2.4 ГГц</text>
+
+  <!-- BLOCK 2: ESP32-S3 -->
+  <rect x="358" y="105" width="290" height="295" rx="12" fill="#0F172A" stroke="#10B981" stroke-width="2" />
+  <text x="503" y="135" text-anchor="middle" fill="#10B981" font-size="16" font-weight="bold">ПЛАТА ESP32-S3</text>
+  <text x="503" y="154" text-anchor="middle" fill="#94A3B8" font-size="11">(ESP32-S3-DevKitC-1 / N16R8)</text>
+
+  <!-- Internal MCU Pinout Box -->
+  <rect x="378" y="170" width="250" height="156" rx="8" fill="#1E293B" stroke="#334155" />
+  <text x="503" y="192" text-anchor="middle" fill="#F8FAFC" font-size="12" font-weight="bold">Распиновка USB Host OTG</text>
+
+  <circle cx="614" cy="216" r="5" fill="#EF4444" />
+  <text x="394" y="220" fill="#FCA5A5" font-size="12" font-weight="bold">5V (IN/VBUS)</text>
+  <text x="598" y="220" text-anchor="end" fill="#FCA5A5" font-size="11">Красный (+5В)</text>
+
+  <circle cx="614" cy="244" r="5" fill="#F8FAFC" />
+  <text x="394" y="248" fill="#F8FAFC" font-size="12" font-weight="bold">GPIO 19 (D-)</text>
+  <text x="598" y="248" text-anchor="end" fill="#CBD5E1" font-size="11">Белый (Data-)</text>
+
+  <circle cx="614" cy="272" r="5" fill="#22C55E" />
+  <text x="394" y="276" fill="#86EFAC" font-size="12" font-weight="bold">GPIO 20 (D+)</text>
+  <text x="598" y="276" text-anchor="end" fill="#86EFAC" font-size="11">Зелёный (Data+)</text>
+
+  <circle cx="614" cy="300" r="5" fill="#64748B" />
+  <text x="394" y="304" fill="#94A3B8" font-size="12" font-weight="bold">GND</text>
+  <text x="598" y="304" text-anchor="end" fill="#94A3B8" font-size="11">Чёрный (Минус)</text>
+
+  <text x="503" y="352" text-anchor="middle" fill="#FACC15" font-size="11" font-weight="bold">5-бод init 200.0 мс/бит (esp_timer)</text>
+  <text x="503" y="372" text-anchor="middle" fill="#94A3B8" font-size="11">Порт UART/COM — только для прошивки</text>
+  <text x="503" y="388" text-anchor="middle" fill="#94A3B8" font-size="11">Порт USB/OTG — выведен на GPIO19/20</text>
+
+  <!-- USB WIRES ESP32 -> USB-A / KKL -->
+  <line x1="648" y1="216" x2="736" y2="216" stroke="#EF4444" stroke-width="3" />
+  <line x1="648" y1="244" x2="736" y2="244" stroke="#E2E8F0" stroke-width="3" />
+  <line x1="648" y1="272" x2="736" y2="272" stroke="#22C55E" stroke-width="3" />
+  <line x1="648" y1="300" x2="736" y2="300" stroke="#64748B" stroke-width="3" />
+  <text x="692" y="204" text-anchor="middle" fill="#CBD5E1" font-size="11" font-weight="bold">USB 2.0</text>
+
+  <!-- BLOCK 3: USB KKL ADAPTER -->
+  <rect x="736" y="125" width="340" height="235" rx="12" fill="#0F172A" stroke="#F59E0B" stroke-width="2" />
+  <text x="906" y="155" text-anchor="middle" fill="#F59E0B" font-size="15" font-weight="bold">КАБЕЛЬ USB KKL 409.1</text>
+  <text x="906" y="175" text-anchor="middle" fill="#CBD5E1" font-size="12">Гнездо USB-A Female (или OTG)</text>
+
+  <rect x="756" y="192" width="300" height="106" rx="8" fill="#1E293B" stroke="#334155" />
+  <text x="772" y="218" fill="#FCA5A5" font-size="12">Pin 1 (+5V VBUS)</text>
+  <text x="1040" y="218" text-anchor="end" fill="#94A3B8" font-size="11">Питание чипа USB</text>
+  <text x="772" y="242" fill="#F8FAFC" font-size="12">Pin 2 (D-)</text>
+  <text x="1040" y="242" text-anchor="end" fill="#94A3B8" font-size="11">к GPIO19</text>
+  <text x="772" y="266" fill="#86EFAC" font-size="12">Pin 3 (D+)</text>
+  <text x="1040" y="266" text-anchor="end" fill="#94A3B8" font-size="11">к GPIO20</text>
+  <text x="772" y="290" fill="#94A3B8" font-size="12">Pin 4 (GND)</text>
+  <text x="1040" y="290" text-anchor="end" fill="#94A3B8" font-size="11">Общая земля</text>
+
+  <text x="906" y="324" text-anchor="middle" fill="#38BDF8" font-size="11" font-weight="bold">Чипы: FTDI FT232 (0x0403) • CH340 • CP2102</text>
+  <text x="906" y="344" text-anchor="middle" fill="#94A3B8" font-size="11">Преобразователь 5В UART ↔ 12В K-Line</text>
+
+  <!-- BLOCK 4: POWER DC-DC 12V -> 5V -->
+  <rect x="358" y="455" width="290" height="225" rx="12" fill="#0F172A" stroke="#EC4899" stroke-width="2" />
+  <text x="503" y="485" text-anchor="middle" fill="#F472B6" font-size="15" font-weight="bold">ПИТАНИЕ 12В → 5В</text>
+  <text x="503" y="505" text-anchor="middle" fill="#CBD5E1" font-size="12">DC-DC (LM2596 / Mini360) или 5В USB</text>
+
+  <rect x="378" y="522" width="250" height="106" rx="8" fill="#1E293B" stroke="#334155" />
+  <text x="503" y="546" text-anchor="middle" fill="#FDE047" font-size="12" font-weight="bold">ВАЖНО ДЛЯ ESP32-S3-DevKitC!</text>
+  <text x="503" y="568" text-anchor="middle" fill="#E2E8F0" font-size="11">Разъём USB-OTG на плате сам НЕ</text>
+  <text x="503" y="584" text-anchor="middle" fill="#E2E8F0" font-size="11">подаёт 5В наружу без перемычки.</text>
+  <text x="503" y="604" text-anchor="middle" fill="#86EFAC" font-size="11">Подайте +5В на 5V пин И на USB VBUS!</text>
+  <text x="503" y="654" text-anchor="middle" fill="#94A3B8" font-size="11">Потребление с KKL кабелем: ~180–250 мА</text>
+
+  <!-- POWER LINE FROM DC-DC TO ESP32 5V/GND & USB VBUS -->
+  <line x1="450" y1="455" x2="450" y2="405" stroke="#EF4444" stroke-width="3" marker-end="url(#arrowAmber)" />
+  <line x1="556" y1="455" x2="556" y2="405" stroke="#64748B" stroke-width="3" />
+  <text x="415" y="435" text-anchor="middle" fill="#FCA5A5" font-size="11" font-weight="bold">+5В</text>
+  <text x="588" y="435" text-anchor="middle" fill="#94A3B8" font-size="11">GND</text>
+
+  <!-- BLOCK 5: CAR OBD-II -->
+  <rect x="736" y="455" width="340" height="225" rx="12" fill="#0F172A" stroke="#A78BFA" stroke-width="2" />
+  <text x="906" y="485" text-anchor="middle" fill="#A78BFA" font-size="15" font-weight="bold">VW VENTO 1995 (OBD-II / 2x2)</text>
+  <text x="906" y="505" text-anchor="middle" fill="#CBD5E1" font-size="12">ЭБУ 1.8 ADZ (0x01) + Иммобилайзер (0x25)</text>
+
+  <rect x="756" y="522" width="300" height="106" rx="8" fill="#1E293B" stroke="#334155" />
+  <text x="772" y="546" fill="#38BDF8" font-size="12" font-weight="bold">Pin 7 (K-Line)</text>
+  <text x="1040" y="546" text-anchor="end" fill="#CBD5E1" font-size="11">серо-белый (KWP1281)</text>
+  <text x="772" y="570" fill="#FCA5A5" font-size="12" font-weight="bold">Pin 16 (+12В)</text>
+  <text x="1040" y="570" text-anchor="end" fill="#CBD5E1" font-size="11">к KKL + вход DC-DC</text>
+  <text x="772" y="594" fill="#94A3B8" font-size="12" font-weight="bold">Pin 4, 5 (GND)</text>
+  <text x="1040" y="594" text-anchor="end" fill="#CBD5E1" font-size="11">масса авто и DC-DC</text>
+  <text x="772" y="618" fill="#64748B" font-size="11">2x2: Белая (K), Чёрная (+12В / -GND)</text>
+
+  <text x="906" y="654" text-anchor="middle" fill="#10B981" font-size="11" font-weight="bold">Скорость: 5 бод старт → 9600 бод 8N1</text>
+
+  <!-- KKL -> OBD-II CONNECTION -->
+  <line x1="906" y1="360" x2="906" y2="449" stroke="#A78BFA" stroke-width="3" marker-end="url(#arrowGreen)" />
+  <text x="980" y="410" text-anchor="middle" fill="#A78BFA" font-size="12" font-weight="bold">OBD-II Вилка</text>
+
+  <!-- OBD-II 12V -> DC-DC POWER -->
+  <line x1="736" y1="570" x2="654" y2="570" stroke="#F59E0B" stroke-width="3" marker-end="url(#arrowAmber)" />
+  <text x="695" y="556" text-anchor="middle" fill="#FDE047" font-size="11" font-weight="bold">+12V / GND</text>
+
+  <!-- ASSEMBLY NOTES BOX BOTTOM LEFT -->
+  <rect x="40" y="365" width="290" height="315" rx="12" fill="#0F172A" stroke="#334155" stroke-width="2" />
+  <text x="185" y="395" text-anchor="middle" fill="#38BDF8" font-size="14" font-weight="bold">ДВА ВАРИАНТА СБОРКИ</text>
+
+  <text x="58" y="425" fill="#10B981" font-size="12" font-weight="bold">Вариант 1 (без пайки пинов):</text>
+  <text x="58" y="445" fill="#CBD5E1" font-size="11">• Кабель USB-C OTG Y-splitter</text>
+  <text x="58" y="463" fill="#CBD5E1" font-size="11">• Вход Y-кабеля → 5В (повербанк</text>
+  <text x="58" y="479" fill="#CBD5E1" font-size="11">  или адаптер в прикуриватель)</text>
+  <text x="58" y="497" fill="#CBD5E1" font-size="11">• Выход OTG → KKL кабель</text>
+  <text x="58" y="515" fill="#CBD5E1" font-size="11">• Type-C штекер → порт USB/OTG</text>
+
+  <line x1="58" y1="534" x2="312" y2="534" stroke="#1E293B" stroke-width="1.5" />
+
+  <text x="58" y="560" fill="#F59E0B" font-size="12" font-weight="bold">Вариант 2 (компактный в корпус):</text>
+  <text x="58" y="580" fill="#CBD5E1" font-size="11">• Гнездо USB-A (4 провода):</text>
+  <text x="58" y="598" fill="#FCA5A5" font-size="11">  1(VBUS)→5V,  4(GND)→GND</text>
+  <text x="58" y="616" fill="#86EFAC" font-size="11">  2(D-)→GPIO19, 3(D+)→GPIO20</text>
+  <text x="58" y="636" fill="#CBD5E1" font-size="11">• Питание от OBD-II Pin 16/4</text>
+  <text x="58" y="654" fill="#CBD5E1" font-size="11">  через DC-DC 12В → 5В на 5V/GND</text>
+</svg>

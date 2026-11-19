@@ -6113,15 +6113,16 @@ kotlin.daemon.jvmargs=-Xmx2048m
  * Аппаратная часть:
  *   Плата: ESP32-S3 (со встроенным USB OTG Host, например ESP32-S3-DevKitC-1 / N16R8)
  *   Кабель: KKL VAG-COM 409.1 USB (FTDI FT232RL/RQ, WCH CH340, Silicon Labs CP2102)
- *   Подключение:
- *     1. KKL USB кабель подключается через OTG-переходник к порту USB-OTG платы ESP32-S3.
- *     2. Питание +5V на шину VBUS OTG (на DevKitC обычно через второй порт UART/5V или перемычку VBUS/5V-IN).
- *     3. KKL вставляется в OBD-II разъём автомобиля (питание 12В берётся с авто).
+ *   Пины USB Host внутри ESP32-S3:
+ *     - GPIO19 -> USB D- (Белый провод USB)
+ *     - GPIO20 -> USB D+ (Зелёный провод USB)
+ *     - 5V     -> USB VBUS +5V (Красный провод USB — обязателен для питания чипа FT232/CH340!)
+ *     - GND    -> USB GND (Чёрный провод USB)
  *
  * Настройки Arduino IDE (инструменты):
  *   Board: "ESP32S3 Dev Module"
  *   USB Mode: "Hardware CDC and JTAG" (чтобы порт USB-OTG был свободен для режима Host)
- *   USB CDC On Boot: "Disabled" (или через UART0 порт для логов Serial)
+ *   USB CDC On Boot: "Disabled" (логи выводятся на порт UART0 / COM)
  *
  * Подключение со смартфона:
  *   Wi-Fi сеть (Точка доступа ESP32): SSID = "VENTO-KKL-WIFI", Пароль = "ventokkl"
@@ -6274,7 +6275,6 @@ static bool sendControlTransfer(
   if (!usbDevHandle || !ctrlTransfer || !ctrlSem) return false;
   if (sizeof(usb_setup_packet_t) + wLength > 64) return false;
 
-  // Сбрасываем семафор перед запуском
   xSemaphoreTake(ctrlSem, 0);
 
   usb_setup_packet_t* setup = (usb_setup_packet_t*)ctrlTransfer->data_buffer;
@@ -6306,12 +6306,9 @@ static bool sendControlTransfer(
 
 static bool kklSetBaud(uint16_t baud) {
   if (chipType == CHIP_FTDI) {
-    // Базовая частота FTDI = 3000000 Гц
-    // 9600 бод: 3000000/9600 = 312.5 -> 0x4138; 10400 бод: 3000000/10400 = 288.46 -> 0x4120
     uint16_t wValue = (baud == 10400) ? 0x4120 : 0x4138;
     return sendControlTransfer(0x40, 0x03, wValue, 0x0000);
   } else if (chipType == CHIP_CH340) {
-    // CH340 clock prescaler 2 (750 kHz): 9600 -> 0xB202, 10400 -> 0xB802
     uint16_t wIndex = (baud == 10400) ? 0xB802 : 0xB202;
     return sendControlTransfer(0x40, 0x9A, 0x1312, wIndex);
   } else if (chipType == CHIP_CP210X) {
@@ -6323,11 +6320,9 @@ static bool kklSetBaud(uint16_t baud) {
 
 static bool kklSetBreak(bool breakOn) {
   if (chipType == CHIP_FTDI) {
-    // 8N1 (0x0008) + Bit 14 (0x4000) для Break ON
     uint16_t wValue = breakOn ? 0x4008 : 0x0008;
     return sendControlTransfer(0x40, 0x04, wValue, 0x0001);
   } else if (chipType == CHIP_CH340) {
-    // Регистр 0x05 в CH340: 0x0000 = Break ON, 0x0101 = Break OFF
     uint16_t wIndex = breakOn ? 0x0000 : 0x0101;
     return sendControlTransfer(0x40, 0x9A, 0x0505, wIndex);
   } else if (chipType == CHIP_CP210X) {
@@ -6504,7 +6499,7 @@ static void openNewUsbDevice(uint8_t devAddr) {
       curIface = intf->bInterfaceNumber;
     } else if (bType == USB_B_DESCRIPTOR_TYPE_ENDPOINT) {
       const usb_ep_desc_t* ep = (const usb_ep_desc_t*)(raw + offset);
-      if ((ep->bmAttributes & 0x03) == 0x02) { // Bulk endpoint
+      if ((ep->bmAttributes & 0x03) == 0x02) {
         if ((ep->bEndpointAddress & 0x80) != 0 && epInAddr == 0) {
           epInAddr = ep->bEndpointAddress;
           epInMps = ep->wMaxPacketSize;
@@ -6729,7 +6724,7 @@ void setup() {
     Serial.println(WiFi.softAPIP());
   }
 
-  WiFi.setSleep(false); // Отключаем энергосбережение Wi-Fi для минимальной задержки K-Line
+  WiFi.setSleep(false);
   tcpServer.begin();
   tcpServer.setNoDelay(true);
   Serial.printf("TCP сервер KWP1281 слушает порт %u\\n", TCP_PORT);
@@ -6767,34 +6762,333 @@ void loop() {
 `
   },
   {
+    path: 'esp32/schematic.svg',
+    filename: 'schematic.svg',
+    language: 'xml',
+    description: 'Векторная схема подключения ESP32-S3 к USB KKL кабелю, питанию 12В->5В и OBD-II VW Vento',
+    content: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 740" width="1120" height="740" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace">
+  <defs>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#38BDF8" />
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10B981" />
+    </marker>
+    <marker id="arrowAmber" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#F59E0B" />
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1120" height="740" fill="#090D16" rx="12" />
+  <rect x="16" y="16" width="1088" height="708" fill="none" stroke="#1E293B" stroke-width="2" rx="10" />
+
+  <!-- Title -->
+  <text x="560" y="52" text-anchor="middle" fill="#38BDF8" font-size="20" font-weight="bold">СХЕМА ПОДКЛЮЧЕНИЯ: ESP32-S3 WI-FI МОСТ ↔ USB KKL КАБЕЛЬ ↔ VW VENTO 1995</text>
+  <text x="560" y="74" text-anchor="middle" fill="#94A3B8" font-size="13">Нативный USB Host (GPIO19 D- / GPIO20 D+) • Питание шины USB +5В • Точка доступа VENTO-KKL-WIFI (192.168.4.1:3333)</text>
+
+  <!-- BLOCK 1: PHONE -->
+  <rect x="40" y="115" width="220" height="220" rx="12" fill="#0F172A" stroke="#38BDF8" stroke-width="2" />
+  <text x="150" y="145" text-anchor="middle" fill="#38BDF8" font-size="15" font-weight="bold">СМАРТФОН ANDROID</text>
+  <text x="150" y="166" text-anchor="middle" fill="#CBD5E1" font-size="12">Приложение:</text>
+  <text x="150" y="184" text-anchor="middle" fill="#FFFFFF" font-size="13" font-weight="bold">Vento Diagnostic</text>
+  <rect x="58" y="202" width="184" height="76" rx="8" fill="#1E293B" stroke="#334155" />
+  <text x="150" y="224" text-anchor="middle" fill="#2DD4BF" font-size="12" font-weight="bold">Режим: WI-FI (ESP32)</text>
+  <text x="150" y="244" text-anchor="middle" fill="#E2E8F0" font-size="11">SSID: VENTO-KKL-WIFI</text>
+  <text x="150" y="262" text-anchor="middle" fill="#E2E8F0" font-size="11">TCP: 192.168.4.1 : 3333</text>
+  <text x="150" y="314" text-anchor="middle" fill="#94A3B8" font-size="11">Протокол KWP1281 поверх TCP</text>
+
+  <!-- WIFI LINK -->
+  <line x1="264" y1="225" x2="352" y2="225" stroke="#38BDF8" stroke-width="3" stroke-dasharray="6,5" marker-end="url(#arrowBlue)" />
+  <text x="308" y="210" text-anchor="middle" fill="#38BDF8" font-size="12" font-weight="bold">Wi-Fi</text>
+  <text x="308" y="246" text-anchor="middle" fill="#94A3B8" font-size="11">2.4 ГГц</text>
+
+  <!-- BLOCK 2: ESP32-S3 -->
+  <rect x="358" y="105" width="290" height="295" rx="12" fill="#0F172A" stroke="#10B981" stroke-width="2" />
+  <text x="503" y="135" text-anchor="middle" fill="#10B981" font-size="16" font-weight="bold">ПЛАТА ESP32-S3</text>
+  <text x="503" y="154" text-anchor="middle" fill="#94A3B8" font-size="11">(ESP32-S3-DevKitC-1 / N16R8)</text>
+
+  <!-- Internal MCU Pinout Box -->
+  <rect x="378" y="170" width="250" height="156" rx="8" fill="#1E293B" stroke="#334155" />
+  <text x="503" y="192" text-anchor="middle" fill="#F8FAFC" font-size="12" font-weight="bold">Распиновка USB Host OTG</text>
+
+  <circle cx="614" cy="216" r="5" fill="#EF4444" />
+  <text x="394" y="220" fill="#FCA5A5" font-size="12" font-weight="bold">5V (IN/VBUS)</text>
+  <text x="598" y="220" text-anchor="end" fill="#FCA5A5" font-size="11">Красный (+5В)</text>
+
+  <circle cx="614" cy="244" r="5" fill="#F8FAFC" />
+  <text x="394" y="248" fill="#F8FAFC" font-size="12" font-weight="bold">GPIO 19 (D-)</text>
+  <text x="598" y="248" text-anchor="end" fill="#CBD5E1" font-size="11">Белый (Data-)</text>
+
+  <circle cx="614" cy="272" r="5" fill="#22C55E" />
+  <text x="394" y="276" fill="#86EFAC" font-size="12" font-weight="bold">GPIO 20 (D+)</text>
+  <text x="598" y="276" text-anchor="end" fill="#86EFAC" font-size="11">Зелёный (Data+)</text>
+
+  <circle cx="614" cy="300" r="5" fill="#64748B" />
+  <text x="394" y="304" fill="#94A3B8" font-size="12" font-weight="bold">GND</text>
+  <text x="598" y="304" text-anchor="end" fill="#94A3B8" font-size="11">Чёрный (Минус)</text>
+
+  <text x="503" y="352" text-anchor="middle" fill="#FACC15" font-size="11" font-weight="bold">5-бод init 200.0 мс/бит (esp_timer)</text>
+  <text x="503" y="372" text-anchor="middle" fill="#94A3B8" font-size="11">Порт UART/COM — только для прошивки</text>
+  <text x="503" y="388" text-anchor="middle" fill="#94A3B8" font-size="11">Порт USB/OTG — выведен на GPIO19/20</text>
+
+  <!-- USB WIRES ESP32 -> USB-A / KKL -->
+  <line x1="648" y1="216" x2="736" y2="216" stroke="#EF4444" stroke-width="3" />
+  <line x1="648" y1="244" x2="736" y2="244" stroke="#E2E8F0" stroke-width="3" />
+  <line x1="648" y1="272" x2="736" y2="272" stroke="#22C55E" stroke-width="3" />
+  <line x1="648" y1="300" x2="736" y2="300" stroke="#64748B" stroke-width="3" />
+  <text x="692" y="204" text-anchor="middle" fill="#CBD5E1" font-size="11" font-weight="bold">USB 2.0</text>
+
+  <!-- BLOCK 3: USB KKL ADAPTER -->
+  <rect x="736" y="125" width="340" height="235" rx="12" fill="#0F172A" stroke="#F59E0B" stroke-width="2" />
+  <text x="906" y="155" text-anchor="middle" fill="#F59E0B" font-size="15" font-weight="bold">КАБЕЛЬ USB KKL 409.1</text>
+  <text x="906" y="175" text-anchor="middle" fill="#CBD5E1" font-size="12">Гнездо USB-A Female (или OTG)</text>
+
+  <rect x="756" y="192" width="300" height="106" rx="8" fill="#1E293B" stroke="#334155" />
+  <text x="772" y="218" fill="#FCA5A5" font-size="12">Pin 1 (+5V VBUS)</text>
+  <text x="1040" y="218" text-anchor="end" fill="#94A3B8" font-size="11">Питание чипа USB</text>
+  <text x="772" y="242" fill="#F8FAFC" font-size="12">Pin 2 (D-)</text>
+  <text x="1040" y="242" text-anchor="end" fill="#94A3B8" font-size="11">к GPIO19</text>
+  <text x="772" y="266" fill="#86EFAC" font-size="12">Pin 3 (D+)</text>
+  <text x="1040" y="266" text-anchor="end" fill="#94A3B8" font-size="11">к GPIO20</text>
+  <text x="772" y="290" fill="#94A3B8" font-size="12">Pin 4 (GND)</text>
+  <text x="1040" y="290" text-anchor="end" fill="#94A3B8" font-size="11">Общая земля</text>
+
+  <text x="906" y="324" text-anchor="middle" fill="#38BDF8" font-size="11" font-weight="bold">Чипы: FTDI FT232 (0x0403) • CH340 • CP2102</text>
+  <text x="906" y="344" text-anchor="middle" fill="#94A3B8" font-size="11">Преобразователь 5В UART ↔ 12В K-Line</text>
+
+  <!-- BLOCK 4: POWER DC-DC 12V -> 5V -->
+  <rect x="358" y="455" width="290" height="225" rx="12" fill="#0F172A" stroke="#EC4899" stroke-width="2" />
+  <text x="503" y="485" text-anchor="middle" fill="#F472B6" font-size="15" font-weight="bold">ПИТАНИЕ 12В → 5В</text>
+  <text x="503" y="505" text-anchor="middle" fill="#CBD5E1" font-size="12">DC-DC (LM2596 / Mini360) или 5В USB</text>
+
+  <rect x="378" y="522" width="250" height="106" rx="8" fill="#1E293B" stroke="#334155" />
+  <text x="503" y="546" text-anchor="middle" fill="#FDE047" font-size="12" font-weight="bold">ВАЖНО ДЛЯ ESP32-S3-DevKitC!</text>
+  <text x="503" y="568" text-anchor="middle" fill="#E2E8F0" font-size="11">Разъём USB-OTG на плате сам НЕ</text>
+  <text x="503" y="584" text-anchor="middle" fill="#E2E8F0" font-size="11">подаёт 5В наружу без перемычки.</text>
+  <text x="503" y="604" text-anchor="middle" fill="#86EFAC" font-size="11">Подайте +5В на 5V пин И на USB VBUS!</text>
+  <text x="503" y="654" text-anchor="middle" fill="#94A3B8" font-size="11">Потребление с KKL кабелем: ~180–250 мА</text>
+
+  <!-- POWER LINE FROM DC-DC TO ESP32 5V/GND & USB VBUS -->
+  <line x1="450" y1="455" x2="450" y2="405" stroke="#EF4444" stroke-width="3" marker-end="url(#arrowAmber)" />
+  <line x1="556" y1="455" x2="556" y2="405" stroke="#64748B" stroke-width="3" />
+  <text x="415" y="435" text-anchor="middle" fill="#FCA5A5" font-size="11" font-weight="bold">+5В</text>
+  <text x="588" y="435" text-anchor="middle" fill="#94A3B8" font-size="11">GND</text>
+
+  <!-- BLOCK 5: CAR OBD-II -->
+  <rect x="736" y="455" width="340" height="225" rx="12" fill="#0F172A" stroke="#A78BFA" stroke-width="2" />
+  <text x="906" y="485" text-anchor="middle" fill="#A78BFA" font-size="15" font-weight="bold">VW VENTO 1995 (OBD-II / 2x2)</text>
+  <text x="906" y="505" text-anchor="middle" fill="#CBD5E1" font-size="12">ЭБУ 1.8 ADZ (0x01) + Иммобилайзер (0x25)</text>
+
+  <rect x="756" y="522" width="300" height="106" rx="8" fill="#1E293B" stroke="#334155" />
+  <text x="772" y="546" fill="#38BDF8" font-size="12" font-weight="bold">Pin 7 (K-Line)</text>
+  <text x="1040" y="546" text-anchor="end" fill="#CBD5E1" font-size="11">серо-белый (KWP1281)</text>
+  <text x="772" y="570" fill="#FCA5A5" font-size="12" font-weight="bold">Pin 16 (+12В)</text>
+  <text x="1040" y="570" text-anchor="end" fill="#CBD5E1" font-size="11">к KKL + вход DC-DC</text>
+  <text x="772" y="594" fill="#94A3B8" font-size="12" font-weight="bold">Pin 4, 5 (GND)</text>
+  <text x="1040" y="594" text-anchor="end" fill="#CBD5E1" font-size="11">масса авто и DC-DC</text>
+  <text x="772" y="618" fill="#64748B" font-size="11">2x2: Белая (K), Чёрная (+12В / -GND)</text>
+
+  <text x="906" y="654" text-anchor="middle" fill="#10B981" font-size="11" font-weight="bold">Скорость: 5 бод старт → 9600 бод 8N1</text>
+
+  <!-- KKL -> OBD-II CONNECTION -->
+  <line x1="906" y1="360" x2="906" y2="449" stroke="#A78BFA" stroke-width="3" marker-end="url(#arrowGreen)" />
+  <text x="980" y="410" text-anchor="middle" fill="#A78BFA" font-size="12" font-weight="bold">OBD-II Вилка</text>
+
+  <!-- OBD-II 12V -> DC-DC POWER -->
+  <line x1="736" y1="570" x2="654" y2="570" stroke="#F59E0B" stroke-width="3" marker-end="url(#arrowAmber)" />
+  <text x="695" y="556" text-anchor="middle" fill="#FDE047" font-size="11" font-weight="bold">+12V / GND</text>
+
+  <!-- ASSEMBLY NOTES BOX BOTTOM LEFT -->
+  <rect x="40" y="365" width="290" height="315" rx="12" fill="#0F172A" stroke="#334155" stroke-width="2" />
+  <text x="185" y="395" text-anchor="middle" fill="#38BDF8" font-size="14" font-weight="bold">ДВА ВАРИАНТА СБОРКИ</text>
+
+  <text x="58" y="425" fill="#10B981" font-size="12" font-weight="bold">Вариант 1 (без пайки пинов):</text>
+  <text x="58" y="445" fill="#CBD5E1" font-size="11">• Кабель USB-C OTG Y-splitter</text>
+  <text x="58" y="463" fill="#CBD5E1" font-size="11">• Вход Y-кабеля → 5В (повербанк</text>
+  <text x="58" y="479" fill="#CBD5E1" font-size="11">  или адаптер в прикуриватель)</text>
+  <text x="58" y="497" fill="#CBD5E1" font-size="11">• Выход OTG → KKL кабель</text>
+  <text x="58" y="515" fill="#CBD5E1" font-size="11">• Type-C штекер → порт USB/OTG</text>
+
+  <line x1="58" y1="534" x2="312" y2="534" stroke="#1E293B" stroke-width="1.5" />
+
+  <text x="58" y="560" fill="#F59E0B" font-size="12" font-weight="bold">Вариант 2 (компактный в корпус):</text>
+  <text x="58" y="580" fill="#CBD5E1" font-size="11">• Гнездо USB-A (4 провода):</text>
+  <text x="58" y="598" fill="#FCA5A5" font-size="11">  1(VBUS)→5V,  4(GND)→GND</text>
+  <text x="58" y="616" fill="#86EFAC" font-size="11">  2(D-)→GPIO19, 3(D+)→GPIO20</text>
+  <text x="58" y="636" fill="#CBD5E1" font-size="11">• Питание от OBD-II Pin 16/4</text>
+  <text x="58" y="654" fill="#CBD5E1" font-size="11">  через DC-DC 12В → 5В на 5V/GND</text>
+</svg>
+`
+  },
+  {
+    path: 'esp32/WIRING_AND_ASSEMBLY.md',
+    filename: 'WIRING_AND_ASSEMBLY.md',
+    language: 'markdown',
+    description: 'Детальная распиновка, нюансы питания VBUS и 2 варианта сборки ESP32-S3 моста',
+    content: `# Схема и детальная сборка ESP32-S3 Wi-Fi ↔ USB KKL моста
+
+Полное руководство по аппаратной сборке, питанию USB-шины и подключению к автомобилю **VW Vento 1995 (1.8 ADZ, Mono-Motronic 1.2.3 + Иммобилайзер 1H0 953 257)**.
+
+> Графическая схема соединений находится рядом в файле [\`schematic.svg\`](./schematic.svg).
+
+---
+
+## 1. Список необходимых компонентов
+
+| Компонент | Рекомендация / Модель | Назначение |
+|---|---|---|
+| **Микроконтроллер** | **ESP32-S3** (\`ESP32-S3-DevKitC-1\`, \`N16R8\`, \`SuperMini\` или аналог) | Имеет **аппаратный USB-OTG Host** (\`GPIO19\`/\`GPIO20\`) и Wi-Fi 2.4 ГГц |
+| **Диагностический кабель** | **KKL VAG-COM 409.1 USB** (чипы **FT232RL**, **CH340** или **CP2102**) | Преобразователь USB ↔ K-Line 12В (KWP1281) |
+| **Питание +5В** | Повербанк / USB-адаптер в прикуриватель **ЛИБО** модуль DC-DC \`12V → 5V\` (\`Mini360\` / \`LM2596\`) | Питание платы ESP32-S3 и микросхемы FT232/CH340 в KKL кабеле (~200 мА) |
+| **Разъём USB для KKL** | OTG Y-кабель с доп. питанием **ЛИБО** розетка **USB-A Female** (4 пина) | Физическое подключение штекера KKL-кабеля к ESP32-S3 |
+| **Переходник 2x2 (если нужен)** | Кабель \`2x2 VAG → OBD-II 16-pin\` | Только для ранних Vento/Golf 3 без 16-пинового разъёма у пепельницы |
+
+> **Почему нельзя взять обычный классический ESP32 (ESP-WROOM-32)?**
+> В обычном ESP32 нет встроенного контроллера USB Host — он умеет работать только через UART. Для прямого подключения готового **USB KKL кабеля** нужен именно **ESP32-S3** (или ESP32-S2).
+
+---
+
+## 2. Критически важная особенность питания USB-OTG на ESP32-S3
+
+На большинстве плат **ESP32-S3-DevKitC-1** (с двумя портами USB-C: \`UART/COM\` и \`USB/OTG\`):
+- Если подать питание только в порт \`UART/COM\`, напряжение \`+5V\` **НЕ выходит** на контакт \`VBUS\` разъёма \`USB/OTG\` (защитный диод на плате пропускает ток только внутрь, но не наружу!).
+- В результате светодиод на USB KKL кабеле (или чип FT232/CH340) **не получает +5В от USB** и ESP32 не видит кабель!
+
+Ниже приведены **два проверенных способа сборки**, полностью решающие эту проблему.
+
+---
+
+## 3. Вариант А: Сборка без пайки (через OTG Y-разветвитель)
+
+Идеально для быстрого старта без паяльника:
+
+\`\`\`text
+[Повербанк / Прикуриватель 5В] ──(питание USB)──┐
+                                                 ├──► [USB-C OTG Y-кабель] ──► Порт [USB/OTG] на ESP32-S3
+[USB KKL кабель 409.1] ──────────(USB-A)─────────┘                                  │
+                                                                               Wi-Fi (192.168.4.1:3333)
+                                                                                    ▼
+                                                                             [Телефон Android]
+\`\`\`
+
+1. Возьмите **USB-C OTG Y-кабель с дополнительным питанием** (папа USB-C → мама USB-A для KKL + хвост питания +5В).
+2. Вставьте папу **USB-C** в порт **\`USB\`** (или \`OTG\`) на плате ESP32-S3 (не в \`UART\`!).
+3. В **USB-A** вставьте кабель KKL 409.1.
+4. На вход питания Y-кабеля подайте +5В от прикуривателя или повербанка — одновременно запитаются и ESP32-S3, и USB-часть KKL кабеля.
+
+---
+
+## 4. Вариант Б: Компактная сборка с пайкой (питание прямо от авто 12В)
+
+Удобно спрятать в небольшой пластиковый корпус или внутрь корпуса самого OBD-II адаптера (тогда никаких внешних проводов питания вообще не нужно):
+
+### Таблица соединений (Распиновка)
+
+| Откуда | Контакт / Цвет | Куда подключать | Примечание |
+|---|---|---|---|
+| **USB-A Female** (розетка для KKL) | Pin 1 — **VBUS** (Красный) | Пин **\`5V\`** на ESP32-S3 + выход **\`+5V\`** DC-DC | Питание USB-чипа KKL |
+| **USB-A Female** (розетка для KKL) | Pin 2 — **D-** (Белый) | Пин **\`GPIO19\`** на ESP32-S3 | USB Data Minus (USB_D-) |
+| **USB-A Female** (розетка для KKL) | Pin 3 — **D+** (Зелёный) | Пин **\`GPIO20\`** на ESP32-S3 | USB Data Plus (USB_D+) |
+| **USB-A Female** (розетка для KKL) | Pin 4 — **GND** (Чёрный) | Пин **\`GND\`** на ESP32-S3 + **\`GND\`** DC-DC | Общая земля |
+| **DC-DC 12В→5В** (вход IN+) | \`+12V IN\` | **OBD-II Pin 16** (+12В АКБ, красно-белый) | Через предохранитель 0.5–1А или штатно |
+| **DC-DC 12В→5В** (вход IN-) | \`GND IN\` | **OBD-II Pin 4 / 5** (масса, коричневый) | Общая масса автомобиля |
+| **DC-DC 12В→5В** (выход OUT+) | \`+5.0V OUT\` | Пин **\`5V\`** на ESP32-S3 + USB Pin 1 | Сначала выставить ровно \`5.0V\` мультиметром! |
+
+> **Внимание при настройке DC-DC (\`Mini360\` / \`LM2596\`)**:
+> Перед припаиванием к ESP32-S3 подайте 12В на вход DC-DC и подстроечным резистором выставьте на выходе ровно **5.00 В** (допустимо \`4.8–5.1 В\`). Не перепутайте с \`3V3\` пином платы — подача 5В на \`3V3\` выведет ESP32 из строя!
+
+> **Заметка о контактах USB-A Female** (если смотреть внутрь разъёма контактной планкой вниз):
+> Слева направо: **1 (+5V)** | **2 (D-)** | **3 (D+)** | **4 (GND)**.
+> Длина проводов от \`GPIO19\`/\`GPIO20\` до гнезда USB-A должна быть как можно короче (до 10–15 см), желательно свитой парой \`D+\` и \`D-\`.
+
+---
+
+## 5. Проверка распиновки OBD-II / 2x2 на VW Vento 1995
+
+- **Разъём OBD-II (16 pin)** — справа от пепельницы под заглушкой:
+  - **Pin 4, 5**: \`GND\` (масса)
+  - **Pin 7**: \`K-Line\` (диагностика ЭБУ \`0x01\` и Иммобилайзера \`0x25\`)
+  - **Pin 16**: \`+12V\` (постоянное питание АКБ)
+- **Разъём 2x2** (на ранних выпусках около регуляторов печки):
+  - **Чёрная фишка**: \`-\` (GND) и \`+\` (+12V)
+  - **Белая фишка**: \`K\` (K-Line → Pin 7 OBD-II) и \`L\` (на 1.8 ADZ обычно не используется)
+`
+  },
+  {
     path: 'esp32/README.md',
     filename: 'esp32/README.md',
     language: 'markdown',
     description: 'Инструкция по прошивке и подключению ESP32-S3 Wi-Fi моста к KKL кабелю',
-    content: `# Wi-Fi мост ESP32-S3 для USB KKL кабеля (KWP1281)
+    content: `# ESP32-S3 Wi-Fi ↔ USB KKL Мост для Vento Diagnostic
 
-Позволяет диагностировать **VW Vento 1995 1.8 ADZ (Mono-Motronic 1.2.3)** и **Иммобилайзер (1H0 953 257)** без проводов от телефона — по Wi-Fi.
+Готовая прошивка, электрическая схема и пошаговая инструкция по сборке беспроводного диагностического адаптера **Wi-Fi (ESP32-S3) + USB KKL 409.1** для автомобиля **VW Vento 1995 1.8 ADZ (Bosch Mono-Motronic 1.2.3 + Иммобилайзер 1H0 953 257)**.
 
-## Схема подключения
-\`\`\`
-[Телефон: Vento Diagnostic]  <-- Wi-Fi (TCP 192.168.4.1:3333) -->  [ESP32-S3]  <-- USB-OTG -->  [USB KKL (FT232/CH340)]  <-->  [OBD-II авто]
-\`\`\`
+## Состав папки \`esp32/\`
 
-## Что понадобится
-1. Плата **ESP32-S3** со встроенным USB-OTG Host (например \`ESP32-S3-DevKitC-1\`, \`ESP32-S3 N16R8\`).
-2. Кабель **USB-OTG** (Type-C / Micro-USB Host) для подключения KKL-адаптера к порту \`USB/OTG\` платы ESP32-S3.
-3. Питание \`5В\` (от повербанка, бортового USB-адаптера прикуривателя или второго порта \`UART\` на DevKitC — на некоторых платах DevKitC нужно замкнуть перемычку \`RGB/IN-5V\` или подать \`5V\` на пин \`5V\`, чтобы на порту OTG появилось питание для микросхемы FT232/CH340).
+- \`esp32_kkl_wifi_bridge/esp32_kkl_wifi_bridge.ino\` — прошивка для ESP32-S3 (встроенный USB Host OTG, поддержка чипов **FTDI FT232**, **CH340** и **CP2102**, микросекундный 5-бод старт \`200.0 мс/бит\`, точка доступа Wi-Fi + TCP сервер).
+- \`schematic.svg\` — векторная схема соединений (USB Host \`GPIO19/20\`, питание \`12V→5V\`, OBD-II и телефон).
+- \`WIRING_AND_ASSEMBLY.md\` — детальное руководство по компонентам, питанию VBUS и двум вариантам сборки (без пайки через OTG Y-кабель и компактный вариант в корпус с DC-DC 12В→5В).
 
-## Прошивка в Arduino IDE
-1. Откройте \`esp32_kkl_wifi_bridge/esp32_kkl_wifi_bridge.ino\`.
-2. Выберите плату: **ESP32S3 Dev Module**.
-3. В меню **Tools → USB Mode** выберите **Hardware CDC and JTAG** (чтобы порт USB-OTG работал в режиме USB Host).
-4. Нажмите **Upload** (прошивка через порт \`UART\`).
+---
 
-## Подключение в приложении Vento Diagnostic
-1. Подключите телефон к Wi-Fi сети **\`VENTO-KKL-WIFI\`** (пароль **\`ventokkl\`**).
-2. В приложении нажмите кнопку **\`WI-FI (ESP32)\`** (адрес \`192.168.4.1\`, порт \`3333\`).
-3. Включите зажигание и нажмите **\`ПОДКЛЮЧИТЬ ЭБУ\`**.
+## Шаг 1. Подготовка и прошивка в Arduino IDE
+
+1. Установите **Arduino IDE 2.x** и добавьте поддержку плат ESP32 (в *File → Preferences → Additional Boards Manager URLs* вставьте \`https://espressif.github.io/arduino-esp32/package_esp32_index.json\`, затем установите пакет **esp32** от Espressif Systems версии \`2.0.14+\` или \`3.x\` в *Boards Manager*).
+2. Откройте файл \`esp32/esp32_kkl_wifi_bridge/esp32_kkl_wifi_bridge.ino\`.
+3. Подключите плату **ESP32-S3** к компьютеру кабелем в разъём **\`UART\` / \`COM\`** (не \`USB/OTG\`!).
+4. Выберите в меню **Tools (Инструменты)** следующие параметры:
+   - **Board**: \`ESP32S3 Dev Module\`
+   - **USB Mode**: **\`Hardware CDC and JTAG\`** *(обязательно! иначе порт USB-OTG не сможет работать в режиме USB Host)*
+   - **USB CDC On Boot**: \`Disabled\`
+   - **Flash Size**: \`8MB (64Mb)\` или \`16MB (128Mb)\` (в зависимости от вашей платы)
+   - **Port**: выберите COM-порт (CP210x / CH343 платы)
+5. Нажмите **Upload (Загрузить)**. Дождитесь надписи \`Hard resetting via RTS pin...\`.
+
+> **Проверка после прошивки**:
+> Откройте *Serial Monitor* на скорости **115200 бод**. Вы должны увидеть:
+> \`\`\`text
+> === VENTO KWP1281 ESP32-S3 WI-FI BRIDGE ===
+> Точка доступа запущена: SSID=VENTO-KKL-WIFI PASS=ventokkl
+> IP адрес моста: 192.168.4.1
+> TCP сервер KWP1281 слушает порт 3333
+> \`\`\`
+> Когда вы подключите USB KKL кабель к USB-Host (\`GPIO19/20\`), в мониторе порта появится:
+> \`USB KKL подключён! VID=0x0403 PID=0x6001 (chip=1)\` (для FTDI) или \`VID=0x1A86\` (для CH340).
+
+---
+
+## Шаг 2. Аппаратная сборка
+
+Подробная распиновка и два варианта подключения описаны в [\`WIRING_AND_ASSEMBLY.md\`](./WIRING_AND_ASSEMBLY.md) и показаны на [\`schematic.svg\`](./schematic.svg):
+- **Кратко**: \`USB D-\` → \`GPIO19\`, \`USB D+\` → \`GPIO20\`, \`USB +5V (VBUS)\` → \`5V\`, \`USB GND\` → \`GND\`.
+- Убедитесь, что при подключении KKL-кабеля на нём светится светодиод (при поданном питании 5В на USB-шину и +12В на OBD-II).
+
+---
+
+## Шаг 3. Подключение к автомобилю и телефону
+
+1. Вставьте KKL кабель в диагностический разъём **OBD-II** автомобиля VW Vento и включите зажигание (приборная панель горит).
+2. Подайте питание 5В на собранный модуль ESP32-S3 (от DC-DC \`12V→5V\` или от повербанка / прикуривателя).
+3. На смартфоне откройте настройки Wi-Fi и подключитесь к сети:
+   - **Имя сети (SSID)**: \`VENTO-KKL-WIFI\`
+   - **Пароль**: \`ventokkl\`
+   - *(Если Android предупредит «Нет доступа к интернету», нажмите «Остаться в этой сети»!)*
+4. Откройте приложение **Vento Diagnostic** на телефоне.
+5. Выберите вкладку **\`ДВИГАТЕЛЬ (01)\`** или **\`ИММОБИЛАЙЗЕР (25)\`**.
+6. Нажмите кнопку **\`WI-FI (ESP32)\`** (проверьте адрес \`192.168.4.1\`, порт \`3333\`).
+7. Нажмите **\`ПОДКЛЮЧИТЬ ЭБУ\`**.
+
+---
+
+## Шаг 4. Поиск и устранение неисправностей
+
+| Симптом | Причина | Решение |
+|---|---|---|
+| В приложении пишет **«ESP32: USB KKL не подключён»** | На USB KKL не подано +5В VBUS или перепутаны \`D+\`/\`D-\` | Проверьте +5В на Pin 1 разъёма USB-A (при использовании \`USB/OTG\` на DevKitC нужен OTG Y-кабель с доп. питанием). Поменяйте местами \`GPIO19\` (D-) и \`GPIO20\` (D+), если припаивали сами. |
+| Телефон не подключается к \`192.168.4.1:3333\` | На телефоне включён мобильный интернет поверх Wi-Fi без интернета | Подтвердите на телефоне «Использовать сеть без интернета» или временно отключите мобильную передачу данных (4G) на время диагностики. |
+| Пишет **«Блок не отвечает»**, но USB KKL определился | Выключено зажигание или нет контакта K-Line (Pin 7) | Проверьте зажигание, светодиод на KKL от +12В авто и контакт K-Line в колодке. Для иммобилайзера проверьте целостность серого провода W-Line. |
+| Ошибка компиляции \`usb_host_install\` в Arduino IDE | Неверно выбрана плата или режим USB | Убедитесь, что выбрана именно **ESP32S3 Dev Module** (не ESP32 Dev Module) и \`USB Mode: Hardware CDC and JTAG\`. |
 `
   },
   {

@@ -5,15 +5,16 @@
  * Аппаратная часть:
  *   Плата: ESP32-S3 (со встроенным USB OTG Host, например ESP32-S3-DevKitC-1 / N16R8)
  *   Кабель: KKL VAG-COM 409.1 USB (FTDI FT232RL/RQ, WCH CH340, Silicon Labs CP2102)
- *   Подключение:
- *     1. KKL USB кабель подключается через OTG-переходник к порту USB-OTG платы ESP32-S3.
- *     2. Питание +5V на шину VBUS OTG (на DevKitC обычно через второй порт UART/5V или перемычку VBUS/5V-IN).
- *     3. KKL вставляется в OBD-II разъём автомобиля (питание 12В берётся с авто).
+ *   Пины USB Host внутри ESP32-S3:
+ *     - GPIO19 -> USB D- (Белый провод USB)
+ *     - GPIO20 -> USB D+ (Зелёный провод USB)
+ *     - 5V     -> USB VBUS +5V (Красный провод USB — обязателен для питания чипа FT232/CH340!)
+ *     - GND    -> USB GND (Чёрный провод USB)
  *
  * Настройки Arduino IDE (инструменты):
  *   Board: "ESP32S3 Dev Module"
  *   USB Mode: "Hardware CDC and JTAG" (чтобы порт USB-OTG был свободен для режима Host)
- *   USB CDC On Boot: "Disabled" (или через UART0 порт для логов Serial)
+ *   USB CDC On Boot: "Disabled" (логи выводятся на порт UART0 / COM)
  *
  * Подключение со смартфона:
  *   Wi-Fi сеть (Точка доступа ESP32): SSID = "VENTO-KKL-WIFI", Пароль = "ventokkl"
@@ -166,7 +167,6 @@ static bool sendControlTransfer(
   if (!usbDevHandle || !ctrlTransfer || !ctrlSem) return false;
   if (sizeof(usb_setup_packet_t) + wLength > 64) return false;
 
-  // Сбрасываем семафор перед запуском
   xSemaphoreTake(ctrlSem, 0);
 
   usb_setup_packet_t* setup = (usb_setup_packet_t*)ctrlTransfer->data_buffer;
@@ -198,12 +198,9 @@ static bool sendControlTransfer(
 
 static bool kklSetBaud(uint16_t baud) {
   if (chipType == CHIP_FTDI) {
-    // Базовая частота FTDI = 3000000 Гц
-    // 9600 бод: 3000000/9600 = 312.5 -> 0x4138; 10400 бод: 3000000/10400 = 288.46 -> 0x4120
     uint16_t wValue = (baud == 10400) ? 0x4120 : 0x4138;
     return sendControlTransfer(0x40, 0x03, wValue, 0x0000);
   } else if (chipType == CHIP_CH340) {
-    // CH340 clock prescaler 2 (750 kHz): 9600 -> 0xB202, 10400 -> 0xB802
     uint16_t wIndex = (baud == 10400) ? 0xB802 : 0xB202;
     return sendControlTransfer(0x40, 0x9A, 0x1312, wIndex);
   } else if (chipType == CHIP_CP210X) {
@@ -215,11 +212,9 @@ static bool kklSetBaud(uint16_t baud) {
 
 static bool kklSetBreak(bool breakOn) {
   if (chipType == CHIP_FTDI) {
-    // 8N1 (0x0008) + Bit 14 (0x4000) для Break ON
     uint16_t wValue = breakOn ? 0x4008 : 0x0008;
     return sendControlTransfer(0x40, 0x04, wValue, 0x0001);
   } else if (chipType == CHIP_CH340) {
-    // Регистр 0x05 в CH340: 0x0000 = Break ON, 0x0101 = Break OFF
     uint16_t wIndex = breakOn ? 0x0000 : 0x0101;
     return sendControlTransfer(0x40, 0x9A, 0x0505, wIndex);
   } else if (chipType == CHIP_CP210X) {
@@ -396,7 +391,7 @@ static void openNewUsbDevice(uint8_t devAddr) {
       curIface = intf->bInterfaceNumber;
     } else if (bType == USB_B_DESCRIPTOR_TYPE_ENDPOINT) {
       const usb_ep_desc_t* ep = (const usb_ep_desc_t*)(raw + offset);
-      if ((ep->bmAttributes & 0x03) == 0x02) { // Bulk endpoint
+      if ((ep->bmAttributes & 0x03) == 0x02) {
         if ((ep->bEndpointAddress & 0x80) != 0 && epInAddr == 0) {
           epInAddr = ep->bEndpointAddress;
           epInMps = ep->wMaxPacketSize;
@@ -621,7 +616,7 @@ void setup() {
     Serial.println(WiFi.softAPIP());
   }
 
-  WiFi.setSleep(false); // Отключаем энергосбережение Wi-Fi для минимальной задержки K-Line
+  WiFi.setSleep(false);
   tcpServer.begin();
   tcpServer.setNoDelay(true);
   Serial.printf("TCP сервер KWP1281 слушает порт %u\n", TCP_PORT);

@@ -32,7 +32,7 @@ import {
 } from '../services/androidProjectGenerator';
 
 export const AndroidProjectView: React.FC = () => {
-  const [activeSubTab, setActiveSubTab] = useState<'guide' | 'code'>('guide');
+  const [activeSubTab, setActiveSubTab] = useState<'guide' | 'esp32' | 'code'>('guide');
   const [selectedFileIdx, setSelectedFileIdx] = useState<number>(0);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [copiedCommands, setCopiedCommands] = useState<boolean>(false);
@@ -41,6 +41,10 @@ export const AndroidProjectView: React.FC = () => {
 
   const currentFile = ANDROID_PROJECT_FILES[selectedFileIdx] || ANDROID_PROJECT_FILES[0];
   const espFileIdx = ANDROID_PROJECT_FILES.findIndex((f) => f.filename === 'esp32_kkl_wifi_bridge.ino');
+  const espSchematicFile = ANDROID_PROJECT_FILES.find((f) => f.path === 'esp32/schematic.svg');
+  const espSchematicDataUrl = espSchematicFile
+    ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(espSchematicFile.content)}`
+    : '';
 
   const handleDownloadZip = async () => {
     setIsDownloading(true);
@@ -135,8 +139,8 @@ git push -u origin main`;
         </button>
       </div>
 
-      {/* Sub-Tabs: Guide vs Code Inspector */}
-      <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+      {/* Sub-Tabs: Guide vs ESP32 Wi-Fi Schematic vs Code Inspector */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-2">
         <button
           onClick={() => setActiveSubTab('guide')}
           className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
@@ -146,7 +150,19 @@ git push -u origin main`;
           }`}
         >
           <Rocket className="w-3.5 h-3.5" />
-          <span>Пошаговая инструкция сборки на GitHub</span>
+          <span>Сборка APK (GitHub)</span>
+        </button>
+
+        <button
+          onClick={() => setActiveSubTab('esp32')}
+          className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+            activeSubTab === 'esp32'
+              ? 'bg-teal-600 text-white shadow-sm'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+          }`}
+        >
+          <Wifi className="w-3.5 h-3.5" />
+          <span>ESP32-S3 Wi-Fi (Схема и сборка)</span>
         </button>
 
         <button
@@ -158,7 +174,7 @@ git push -u origin main`;
           }`}
         >
           <Code className="w-3.5 h-3.5" />
-          <span>Файлы проекта и воркфлоу Actions ({ANDROID_PROJECT_FILES.length})</span>
+          <span>Файлы проекта ({ANDROID_PROJECT_FILES.length})</span>
         </button>
       </div>
 
@@ -377,7 +393,105 @@ git push -u origin main`;
         </div>
       )}
 
-      {/* VIEW 2: CODE & FILES INSPECTOR */}
+      {/* VIEW 2: ESP32-S3 WI-FI SCHEMATIC & ASSEMBLY GUIDE */}
+      {activeSubTab === 'esp32' && (
+        <div className="space-y-4">
+          <div className="bg-slate-900 border border-teal-800/70 rounded-xl p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                  <Wifi className="w-4 h-4 text-teal-400" />
+                  <span>Папка esp32/: прошивка, схема и сборка Wi-Fi моста (ESP32-S3 + USB KKL)</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Все файлы лежат в папке <code>esp32/</code> проекта и внутри скачиваемого ZIP-архива.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={handleCopyEspFirmware}
+                  className="px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-600 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                >
+                  {copiedEsp ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedEsp ? 'Скетч скопирован!' : 'Копировать .ino'}</span>
+                </button>
+                <button
+                  onClick={handleOpenEspInInspector}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                >
+                  <FileCode className="w-3.5 h-3.5" />
+                  <span>Открыть код</span>
+                </button>
+              </div>
+            </div>
+
+            {espSchematicDataUrl && (
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 overflow-x-auto">
+                <img
+                  src={espSchematicDataUrl}
+                  alt="Схема подключения ESP32-S3 к USB KKL и OBD-II VW Vento"
+                  className="w-full max-w-4xl mx-auto h-auto rounded-lg"
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2 text-xs">
+              <h4 className="text-sm font-bold text-slate-100">Распиновка USB Host на ESP32-S3</h4>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-[11px]">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-slate-400">
+                      <th className="py-1.5 pr-2">USB-A Female</th>
+                      <th className="py-1.5 pr-2">Пин ESP32-S3</th>
+                      <th className="py-1.5">Назначение</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 text-slate-200 font-mono">
+                    <tr>
+                      <td className="py-1.5 pr-2 text-rose-400">Pin 1 (Красный)</td>
+                      <td className="py-1.5 pr-2">5V (VBUS)</td>
+                      <td className="py-1.5 font-sans text-slate-300">Питание FT232/CH340 (+5В обязательно!)</td>
+                    </tr>
+                    <tr>
+                      <td className="py-1.5 pr-2 text-slate-100">Pin 2 (Белый)</td>
+                      <td className="py-1.5 pr-2 text-blue-300">GPIO 19 (D-)</td>
+                      <td className="py-1.5 font-sans text-slate-300">USB Data Minus</td>
+                    </tr>
+                    <tr>
+                      <td className="py-1.5 pr-2 text-emerald-400">Pin 3 (Зелёный)</td>
+                      <td className="py-1.5 pr-2 text-blue-300">GPIO 20 (D+)</td>
+                      <td className="py-1.5 font-sans text-slate-300">USB Data Plus</td>
+                    </tr>
+                    <tr>
+                      <td className="py-1.5 pr-2 text-slate-400">Pin 4 (Чёрный)</td>
+                      <td className="py-1.5 pr-2">GND</td>
+                      <td className="py-1.5 font-sans text-slate-300">Общая земля с авто и DC-DC</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[11px] text-amber-300 pt-1">
+                ⚠️ Важно: на платах DevKitC порт USB-OTG не подаёт 5В на выход без OTG Y-кабеля или подачи +5В на контакт VBUS!
+              </p>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2 text-xs text-slate-300">
+              <h4 className="text-sm font-bold text-slate-100">Настройки Arduino IDE и подключение</h4>
+              <ul className="list-disc list-inside space-y-1.5 leading-relaxed">
+                <li>Плата: <code>ESP32S3 Dev Module</code> (обычный ESP32-WROOM-32 не имеет USB Host).</li>
+                <li>USB Mode: <strong><code>Hardware CDC and JTAG</code></strong> (освобождает USB-OTG под Host).</li>
+                <li>USB CDC On Boot: <code>Disabled</code> (прошивка и лог через порт <code>UART/COM</code>).</li>
+                <li>Питание в авто: DC-DC <code>12В → 5.0В</code> с OBD-II (Pin 16/4) или OTG Y-кабель от прикуривателя.</li>
+                <li>Wi-Fi точка: <code>VENTO-KKL-WIFI</code>, пароль <code>ventokkl</code>, в приложении адрес <code>192.168.4.1:3333</code>.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW 3: CODE & FILES INSPECTOR */}
       {activeSubTab === 'code' && (
         <div className="space-y-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
