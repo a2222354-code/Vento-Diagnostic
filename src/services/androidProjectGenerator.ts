@@ -2783,6 +2783,17 @@ class OscilloscopeView @JvmOverloads constructor(
                 android:textStyle="bold"
                 android:typeface="monospace" />
         </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/btnOpenSettings"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/bg_icon_button"
+            android:src="@drawable/ic_settings_gear"
+            android:padding="8dp"
+            android:scaleType="fitCenter"
+            android:contentDescription="Настройки" />
     </LinearLayout>
 
     <!-- ECU Module Switcher Tabs: Engine (0x01) vs Immobilizer (0x25) -->
@@ -3161,60 +3172,28 @@ class OscilloscopeView @JvmOverloads constructor(
     </LinearLayout>
 
     <!-- Main Action Buttons (Uniform 54dp height and uniform 12sp font across all buttons) -->
-    <!-- Row 1: Connect ECU + Settings submenu -->
-    <LinearLayout
+    <!-- Row 1: Connect ECU -->
+    <Button
+        android:id="@+id/btnConnectEcu"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:baselineAligned="false"
-        android:layout_marginBottom="6dp">
-
-        <Button
-            android:id="@+id/btnConnectEcu"
-            android:layout_width="0dp"
-            android:layout_height="54dp"
-            android:layout_weight="1.45"
-            android:layout_marginEnd="4dp"
-            android:minHeight="0dp"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
-            android:paddingTop="4dp"
-            android:paddingBottom="4dp"
-            android:gravity="center"
-            android:textAlignment="center"
-            android:letterSpacing="0.02"
-            android:maxLines="2"
-            android:text="ПОДКЛЮЧИТЬ ЭБУ"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:backgroundTint="#10B981"
-            android:textColor="#FFFFFF" />
-
-        <Button
-            android:id="@+id/btnOpenSettings"
-            android:layout_width="0dp"
-            android:layout_height="54dp"
-            android:layout_weight="1"
-            android:layout_marginStart="4dp"
-            android:minHeight="0dp"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
-            android:paddingTop="4dp"
-            android:paddingBottom="4dp"
-            android:gravity="center"
-            android:textAlignment="center"
-            android:letterSpacing="0.02"
-            android:maxLines="2"
-            android:text="НАСТРОЙКИ"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:backgroundTint="#334155"
-            android:textColor="#E2E8F0" />
-    </LinearLayout>
+        android:layout_height="54dp"
+        android:layout_marginBottom="6dp"
+        android:minHeight="0dp"
+        android:insetTop="0dp"
+        android:insetBottom="0dp"
+        android:paddingStart="6dp"
+        android:paddingEnd="6dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp"
+        android:gravity="center"
+        android:textAlignment="center"
+        android:letterSpacing="0.02"
+        android:maxLines="2"
+        android:text="ПОДКЛЮЧИТЬ ЭБУ"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:backgroundTint="#10B981"
+        android:textColor="#FFFFFF" />
 
     <!-- Row 2: DTC Faults -->
     <LinearLayout
@@ -4344,6 +4323,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -4375,7 +4355,7 @@ class MainActivity : AppCompatActivity() {
 
     // Настройки подключения и экрана (сохраняются в SharedPreferences)
     private lateinit var tvTransportBadge: TextView
-    private lateinit var btnOpenSettings: Button
+    private lateinit var btnOpenSettings: ImageButton
     private var isWifiMode: Boolean = false
     private var wifiHost: String = "192.168.4.1"
     private var wifiPort: Int = 3333
@@ -4393,7 +4373,6 @@ class MainActivity : AppCompatActivity() {
         private const val ORIENT_AUTO = "AUTO"
         private const val ORIENT_PORTRAIT = "PORTRAIT"
         private const val ORIENT_LANDSCAPE = "LANDSCAPE"
-        private const val ORIENT_SENSOR = "SENSOR"
     }
 
     // Отдельное окно измерений и осциллограф
@@ -4721,7 +4700,6 @@ class MainActivity : AppCompatActivity() {
         val target = when (orientationMode) {
             ORIENT_PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             ORIENT_LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            ORIENT_SENSOR -> ActivityInfo.SCREEN_ORIENTATION_SENSOR
             else -> if (detectNaturalLandscape()) {
                 ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             } else {
@@ -4768,7 +4746,6 @@ class MainActivity : AppCompatActivity() {
         val btnOrientAuto = dialog.findViewById<Button>(R.id.btnOrientAuto)
         val btnOrientLandscape = dialog.findViewById<Button>(R.id.btnOrientLandscape)
         val btnOrientPortrait = dialog.findViewById<Button>(R.id.btnOrientPortrait)
-        val btnOrientSensor = dialog.findViewById<Button>(R.id.btnOrientSensor)
         val tvOrientHint = dialog.findViewById<TextView>(R.id.tvOrientHint)
         val cbKeepScreenOn = dialog.findViewById<CheckBox>(R.id.cbKeepScreenOn)
 
@@ -4776,7 +4753,7 @@ class MainActivity : AppCompatActivity() {
         val btnSettingsSave = dialog.findViewById<Button>(R.id.btnSettingsSave)
 
         var draftWifi = isWifiMode
-        var draftOrient = orientationMode
+        var draftOrient = if (orientationMode == ORIENT_PORTRAIT || orientationMode == ORIENT_LANDSCAPE) orientationMode else ORIENT_AUTO
 
         etSetWifiHost.setText(wifiHost)
         etSetWifiPort.setText(wifiPort.toString())
@@ -4811,12 +4788,10 @@ class MainActivity : AppCompatActivity() {
             styleOrientBtn(btnOrientAuto, draftOrient == ORIENT_AUTO)
             styleOrientBtn(btnOrientLandscape, draftOrient == ORIENT_LANDSCAPE)
             styleOrientBtn(btnOrientPortrait, draftOrient == ORIENT_PORTRAIT)
-            styleOrientBtn(btnOrientSensor, draftOrient == ORIENT_SENSOR)
 
             tvOrientHint.text = when (draftOrient) {
                 ORIENT_LANDSCAPE -> "Горизонтальный 2-колоночный интерфейс для 7\\" Android автомагнитол (1024×600 / 1280×720) и планшетов."
                 ORIENT_PORTRAIT -> "Фиксированный вертикальный режим для смартфонов (поворот экрана заблокирован)."
-                ORIENT_SENSOR -> "Свободный поворот экрана по датчику положения (телефон / автомагнитола)."
                 else -> "Авто: смартфон фиксируется вертикально, а 7\\" автомагнитола открывается горизонтально в две колонки."
             }
         }
@@ -4840,10 +4815,6 @@ class MainActivity : AppCompatActivity() {
         }
         btnOrientPortrait.setOnClickListener {
             draftOrient = ORIENT_PORTRAIT
-            refreshOrientUi()
-        }
-        btnOrientSensor.setOnClickListener {
-            draftOrient = ORIENT_SENSOR
             refreshOrientUi()
         }
 
@@ -4903,7 +4874,7 @@ class MainActivity : AppCompatActivity() {
                         "1. Подключите USB KKL кабель (FT232 / CH340) к порту USB-OTG платы ESP32-S3.\\n" +
                         "2. На устройстве подключитесь к Wi-Fi сети ESP32: VENTO-KKL-WIFI (пароль: ventokkl).\\n" +
                         "3. Включите зажигание автомобиля и нажмите «ПОДКЛЮЧИТЬ ЭБУ».\\n\\n" +
-                        "Сменить способ подключения или IP/порт можно в меню «НАСТРОЙКИ».")
+                        "Сменить способ подключения или IP/порт можно по иконке шестерёнки вверху справа.")
             }
         } else {
             tvTransportBadge.text = "USB OTG"
@@ -4912,7 +4883,7 @@ class MainActivity : AppCompatActivity() {
             if (kwProtocol?.isSessionActive != true) {
                 findUsbAdapter(autoRequestPermission = false)
                 setResultText("Режим прямого подключения через USB KKL кабель.\\nПодключите кабель к устройству (смартфону или USB-порту автомагнитолы), включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ».\\n\\n" +
-                        "Для работы по Wi-Fi (ESP32) откройте «НАСТРОЙКИ».")
+                        "Для работы по Wi-Fi (ESP32) нажмите шестерёнку вверху справа.")
             }
         }
     }
@@ -5124,7 +5095,7 @@ class MainActivity : AppCompatActivity() {
         val manager = usbManager ?: return
         val dev = findUsbAdapter(autoRequestPermission = false)
         if (dev == null) {
-            setResultText("USB KKL адаптер не обнаружен.\\n\\n• Подключите кабель через USB-OTG переходник (или к USB автомагнитолы).\\n• Либо откройте «НАСТРОЙКИ» и выберите «WI-FI (ESP32)».")
+            setResultText("USB KKL адаптер не обнаружен.\\n\\n• Подключите кабель через USB-OTG переходник (или к USB автомагнитолы).\\n• Либо нажмите шестерёнку вверху справа и выберите «WI-FI (ESP32)».")
             return
         }
 
@@ -7460,27 +7431,29 @@ void loop() {
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
                     android:baselineAligned="false"
-                    android:layout_marginBottom="6dp">
+                    android:layout_marginBottom="8dp">
 
                     <Button
                         android:id="@+id/btnOrientAuto"
                         android:layout_width="0dp"
                         android:layout_height="54dp"
                         android:layout_weight="1"
-                        android:layout_marginEnd="4dp"
+                        android:layout_marginEnd="3dp"
                         android:minHeight="0dp"
                         android:insetTop="0dp"
                         android:insetBottom="0dp"
-                        android:paddingStart="6dp"
-                        android:paddingEnd="6dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
                         android:paddingTop="4dp"
                         android:paddingBottom="4dp"
                         android:gravity="center"
                         android:textAlignment="center"
                         android:letterSpacing="0.02"
+                        android:breakStrategy="simple"
+                        android:hyphenationFrequency="none"
                         android:maxLines="2"
-                        android:text="АВТО (ПО ЭКРАНУ)"
-                        android:textSize="12sp"
+                        android:text="АВТО\\n(ПО ЭКРАНУ)"
+                        android:textSize="11sp"
                         android:textStyle="bold"
                         android:backgroundTint="#0284C7"
                         android:textColor="#FFFFFF" />
@@ -7490,74 +7463,48 @@ void loop() {
                         android:layout_width="0dp"
                         android:layout_height="54dp"
                         android:layout_weight="1"
-                        android:layout_marginStart="4dp"
+                        android:layout_marginStart="3dp"
+                        android:layout_marginEnd="3dp"
                         android:minHeight="0dp"
                         android:insetTop="0dp"
                         android:insetBottom="0dp"
-                        android:paddingStart="6dp"
-                        android:paddingEnd="6dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
                         android:paddingTop="4dp"
                         android:paddingBottom="4dp"
                         android:gravity="center"
                         android:textAlignment="center"
                         android:letterSpacing="0.02"
+                        android:breakStrategy="simple"
+                        android:hyphenationFrequency="none"
                         android:maxLines="2"
-                        android:text="МАГНИТОЛА 7&quot; (ГОР.)"
-                        android:textSize="12sp"
+                        android:text="МАГНИТОЛА\\n7&quot; (ГОР.)"
+                        android:textSize="11sp"
                         android:textStyle="bold"
                         android:backgroundTint="#334155"
                         android:textColor="#94A3B8" />
-                </LinearLayout>
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:baselineAligned="false"
-                    android:layout_marginBottom="8dp">
 
                     <Button
                         android:id="@+id/btnOrientPortrait"
                         android:layout_width="0dp"
                         android:layout_height="54dp"
                         android:layout_weight="1"
-                        android:layout_marginEnd="4dp"
+                        android:layout_marginStart="3dp"
                         android:minHeight="0dp"
                         android:insetTop="0dp"
                         android:insetBottom="0dp"
-                        android:paddingStart="6dp"
-                        android:paddingEnd="6dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
                         android:paddingTop="4dp"
                         android:paddingBottom="4dp"
                         android:gravity="center"
                         android:textAlignment="center"
                         android:letterSpacing="0.02"
+                        android:breakStrategy="simple"
+                        android:hyphenationFrequency="none"
                         android:maxLines="2"
-                        android:text="ТЕЛЕФОН (ВЕРТ.)"
-                        android:textSize="12sp"
-                        android:textStyle="bold"
-                        android:backgroundTint="#334155"
-                        android:textColor="#94A3B8" />
-
-                    <Button
-                        android:id="@+id/btnOrientSensor"
-                        android:layout_width="0dp"
-                        android:layout_height="54dp"
-                        android:layout_weight="1"
-                        android:layout_marginStart="4dp"
-                        android:minHeight="0dp"
-                        android:insetTop="0dp"
-                        android:insetBottom="0dp"
-                        android:paddingStart="6dp"
-                        android:paddingEnd="6dp"
-                        android:paddingTop="4dp"
-                        android:paddingBottom="4dp"
-                        android:gravity="center"
-                        android:textAlignment="center"
-                        android:letterSpacing="0.02"
-                        android:maxLines="2"
-                        android:text="ПОВОРОТ ДАТЧИКОМ"
-                        android:textSize="12sp"
+                        android:text="ТЕЛЕФОН\\n(ВЕРТ.)"
+                        android:textSize="11sp"
                         android:textStyle="bold"
                         android:backgroundTint="#334155"
                         android:textColor="#94A3B8" />
@@ -7722,6 +7669,17 @@ void loop() {
             android:textSize="11sp"
             android:textStyle="bold"
             android:typeface="monospace" />
+
+        <ImageButton
+            android:id="@+id/btnOpenSettings"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/bg_icon_button"
+            android:src="@drawable/ic_settings_gear"
+            android:padding="7dp"
+            android:scaleType="fitCenter"
+            android:contentDescription="Настройки" />
     </LinearLayout>
 
     <!-- 2-Column Body: Left Control Pad + Right Status & Diagnostic Results -->
@@ -7804,60 +7762,28 @@ void loop() {
                         android:textColor="#94A3B8" />
                 </LinearLayout>
 
-                <!-- Row 1: Connect ECU + Settings -->
-                <LinearLayout
+                <!-- Row 1: Connect ECU -->
+                <Button
+                    android:id="@+id/btnConnectEcu"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:baselineAligned="false"
-                    android:layout_marginBottom="6dp">
-
-                    <Button
-                        android:id="@+id/btnConnectEcu"
-                        android:layout_width="0dp"
-                        android:layout_height="54dp"
-                        android:layout_weight="1.45"
-                        android:layout_marginEnd="4dp"
-                        android:minHeight="0dp"
-                        android:insetTop="0dp"
-                        android:insetBottom="0dp"
-                        android:paddingStart="6dp"
-                        android:paddingEnd="6dp"
-                        android:paddingTop="4dp"
-                        android:paddingBottom="4dp"
-                        android:gravity="center"
-                        android:textAlignment="center"
-                        android:letterSpacing="0.02"
-                        android:maxLines="2"
-                        android:text="ПОДКЛЮЧИТЬ ЭБУ"
-                        android:textSize="12sp"
-                        android:textStyle="bold"
-                        android:backgroundTint="#10B981"
-                        android:textColor="#FFFFFF" />
-
-                    <Button
-                        android:id="@+id/btnOpenSettings"
-                        android:layout_width="0dp"
-                        android:layout_height="54dp"
-                        android:layout_weight="1"
-                        android:layout_marginStart="4dp"
-                        android:minHeight="0dp"
-                        android:insetTop="0dp"
-                        android:insetBottom="0dp"
-                        android:paddingStart="6dp"
-                        android:paddingEnd="6dp"
-                        android:paddingTop="4dp"
-                        android:paddingBottom="4dp"
-                        android:gravity="center"
-                        android:textAlignment="center"
-                        android:letterSpacing="0.02"
-                        android:maxLines="2"
-                        android:text="НАСТРОЙКИ"
-                        android:textSize="12sp"
-                        android:textStyle="bold"
-                        android:backgroundTint="#334155"
-                        android:textColor="#E2E8F0" />
-                </LinearLayout>
+                    android:layout_height="54dp"
+                    android:layout_marginBottom="6dp"
+                    android:minHeight="0dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingStart="6dp"
+                    android:paddingEnd="6dp"
+                    android:paddingTop="4dp"
+                    android:paddingBottom="4dp"
+                    android:gravity="center"
+                    android:textAlignment="center"
+                    android:letterSpacing="0.02"
+                    android:maxLines="2"
+                    android:text="ПОДКЛЮЧИТЬ ЭБУ"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#10B981"
+                    android:textColor="#FFFFFF" />
 
                 <!-- Row 2: DTC Faults -->
                 <LinearLayout
@@ -8423,7 +8349,7 @@ void loop() {
                     android:textColor="#F1F5F9"
                     android:textSize="12sp"
                     android:lineSpacingExtra="3dp"
-                    android:text="Подключите USB KKL адаптер или выберите Wi-Fi (ESP32) в «НАСТРОЙКИ», включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ»." />
+                    android:text="Подключите USB KKL адаптер или выберите Wi-Fi (ESP32) по иконке шестерёнки вверху справа, включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ»." />
             </ScrollView>
         </LinearLayout>
     </LinearLayout>
@@ -9287,6 +9213,38 @@ void loop() {
     </LinearLayout>
 
 </LinearLayout>
+`
+  },
+  {
+    path: 'app/src/main/res/drawable/ic_settings_gear.xml',
+    filename: 'ic_settings_gear.xml',
+    language: 'xml',
+    description: 'Векторная иконка шестерёнки настроек в шапке',
+    content: `<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#CBD5E1"
+        android:pathData="M19.14,12.94c0.04,-0.3 0.06,-0.61 0.06,-0.94c0,-0.32 -0.02,-0.64 -0.07,-0.94l2.03,-1.58c0.18,-0.14 0.23,-0.41 0.12,-0.61l-1.92,-3.32c-0.12,-0.22 -0.37,-0.29 -0.59,-0.22l-2.39,0.96c-0.5,-0.38 -1.03,-0.7 -1.62,-0.94L14.4,2.81c-0.04,-0.24 -0.24,-0.41 -0.48,-0.41h-3.84c-0.24,0 -0.43,0.17 -0.47,0.41L9.25,5.35C8.66,5.59 8.12,5.92 7.63,6.29L5.24,5.33c-0.22,-0.08 -0.47,0 -0.59,0.22L2.74,8.87C2.62,9.08 2.66,9.34 2.86,9.48l2.03,1.58C4.84,11.36 4.8,11.69 4.8,12s0.02,0.64 0.07,0.94l-2.03,1.58c-0.18,0.14 -0.23,0.41 -0.12,0.61l1.92,3.32c0.12,0.22 0.37,0.29 0.59,0.22l2.39,-0.96c0.5,0.38 1.03,0.7 1.62,0.94l0.36,2.54c0.05,0.24 0.24,0.41 0.48,0.41h3.84c0.24,0 0.44,-0.17 0.47,-0.41l0.36,-2.54c0.59,-0.24 1.13,-0.56 1.62,-0.94l2.39,0.96c0.22,0.08 0.47,0 0.59,-0.22l1.92,-3.32c0.12,-0.22 0.07,-0.47 -0.12,-0.61L19.14,12.94zM12,15.6c-1.98,0 -3.6,-1.62 -3.6,-3.6s1.62,-3.6 3.6,-3.6s3.6,1.62 3.6,3.6S13.98,15.6 12,15.6z" />
+</vector>
+`
+  },
+  {
+    path: 'app/src/main/res/drawable/bg_icon_button.xml',
+    filename: 'bg_icon_button.xml',
+    language: 'xml',
+    description: 'Фон кнопки-иконки настроек',
+    content: `<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#1E293B" />
+    <stroke
+        android:width="1dp"
+        android:color="#334155" />
+    <corners android:radius="8dp" />
+</shape>
 `
   }
 ];

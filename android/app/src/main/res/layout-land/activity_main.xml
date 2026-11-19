@@ -75,6 +75,17 @@
             android:textSize="11sp"
             android:textStyle="bold"
             android:typeface="monospace" />
+
+        <ImageButton
+            android:id="@+id/btnOpenSettings"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/bg_icon_button"
+            android:src="@drawable/ic_settings_gear"
+            android:padding="7dp"
+            android:scaleType="fitCenter"
+            android:contentDescription="Настройки" />
     </LinearLayout>
 
     <!-- 2-Column Body: Left Control Pad + Right Status & Diagnostic Results -->
@@ -157,60 +168,28 @@
                         android:textColor="#94A3B8" />
                 </LinearLayout>
 
-                <!-- Row 1: Connect ECU + Settings -->
-                <LinearLayout
+                <!-- Row 1: Connect ECU -->
+                <Button
+                    android:id="@+id/btnConnectEcu"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:baselineAligned="false"
-                    android:layout_marginBottom="6dp">
-
-                    <Button
-                        android:id="@+id/btnConnectEcu"
-                        android:layout_width="0dp"
-                        android:layout_height="54dp"
-                        android:layout_weight="1.45"
-                        android:layout_marginEnd="4dp"
-                        android:minHeight="0dp"
-                        android:insetTop="0dp"
-                        android:insetBottom="0dp"
-                        android:paddingStart="6dp"
-                        android:paddingEnd="6dp"
-                        android:paddingTop="4dp"
-                        android:paddingBottom="4dp"
-                        android:gravity="center"
-                        android:textAlignment="center"
-                        android:letterSpacing="0.02"
-                        android:maxLines="2"
-                        android:text="ПОДКЛЮЧИТЬ ЭБУ"
-                        android:textSize="12sp"
-                        android:textStyle="bold"
-                        android:backgroundTint="#10B981"
-                        android:textColor="#FFFFFF" />
-
-                    <Button
-                        android:id="@+id/btnOpenSettings"
-                        android:layout_width="0dp"
-                        android:layout_height="54dp"
-                        android:layout_weight="1"
-                        android:layout_marginStart="4dp"
-                        android:minHeight="0dp"
-                        android:insetTop="0dp"
-                        android:insetBottom="0dp"
-                        android:paddingStart="6dp"
-                        android:paddingEnd="6dp"
-                        android:paddingTop="4dp"
-                        android:paddingBottom="4dp"
-                        android:gravity="center"
-                        android:textAlignment="center"
-                        android:letterSpacing="0.02"
-                        android:maxLines="2"
-                        android:text="НАСТРОЙКИ"
-                        android:textSize="12sp"
-                        android:textStyle="bold"
-                        android:backgroundTint="#334155"
-                        android:textColor="#E2E8F0" />
-                </LinearLayout>
+                    android:layout_height="54dp"
+                    android:layout_marginBottom="6dp"
+                    android:minHeight="0dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingStart="6dp"
+                    android:paddingEnd="6dp"
+                    android:paddingTop="4dp"
+                    android:paddingBottom="4dp"
+                    android:gravity="center"
+                    android:textAlignment="center"
+                    android:letterSpacing="0.02"
+                    android:maxLines="2"
+                    android:text="ПОДКЛЮЧИТЬ ЭБУ"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#10B981"
+                    android:textColor="#FFFFFF" />
 
                 <!-- Row 2: DTC Faults -->
                 <LinearLayout
@@ -776,7 +755,7 @@
                     android:textColor="#F1F5F9"
                     android:textSize="12sp"
                     android:lineSpacingExtra="3dp"
-                    android:text="Подключите USB KKL адаптер или выберите Wi-Fi (ESP32) в «НАСТРОЙКИ», включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ»." />
+                    android:text="Подключите USB KKL адаптер или выберите Wi-Fi (ESP32) по иконке шестерёнки вверху справа, включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ»." />
             </ScrollView>
         </LinearLayout>
     </LinearLayout>

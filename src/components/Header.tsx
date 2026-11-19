@@ -211,16 +211,6 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="text-slate-300 font-medium">{getStateText()}</span>
             </div>
 
-            {/* Settings Submenu Button */}
-            <button
-              onClick={openSettings}
-              className="hidden md:flex px-2.5 py-1 text-xs font-medium rounded-md bg-slate-950 hover:bg-slate-800 text-slate-200 border border-slate-800 items-center gap-1.5 transition-colors"
-              title="Настройки подключения и автомагнитолы 7&quot;"
-            >
-              <Settings className="w-3.5 h-3.5 text-blue-400" />
-              <span>Настройки</span>
-            </button>
-
             {/* Share / Open on Phone Button */}
             <button
               onClick={() => setShowShareModal(true)}
@@ -243,7 +233,7 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             )}
 
-            {/* Desktop / Head Unit Connect / Disconnect Button */}
+            {/* Desktop / Head Unit Connect / Disconnect Button & Top-Right Gear */}
             <div className="hidden md:flex items-center gap-2">
               {isConnected ? (
                 <button
@@ -263,6 +253,15 @@ export const Header: React.FC<HeaderProps> = ({
                   <span>{isBusy ? 'Подключение...' : 'Установить связь'}</span>
                 </button>
               )}
+
+              <button
+                onClick={openSettings}
+                className="p-1.5 rounded-md bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 transition-colors"
+                title="Настройки подключения и экрана"
+                aria-label="Настройки"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
             </div>
           </div>
         </div>

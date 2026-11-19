@@ -26,6 +26,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -57,7 +58,7 @@ class MainActivity : AppCompatActivity() {
 
     // Настройки подключения и экрана (сохраняются в SharedPreferences)
     private lateinit var tvTransportBadge: TextView
-    private lateinit var btnOpenSettings: Button
+    private lateinit var btnOpenSettings: ImageButton
     private var isWifiMode: Boolean = false
     private var wifiHost: String = "192.168.4.1"
     private var wifiPort: Int = 3333
@@ -75,7 +76,6 @@ class MainActivity : AppCompatActivity() {
         private const val ORIENT_AUTO = "AUTO"
         private const val ORIENT_PORTRAIT = "PORTRAIT"
         private const val ORIENT_LANDSCAPE = "LANDSCAPE"
-        private const val ORIENT_SENSOR = "SENSOR"
     }
 
     // Отдельное окно измерений и осциллограф
@@ -403,7 +403,6 @@ class MainActivity : AppCompatActivity() {
         val target = when (orientationMode) {
             ORIENT_PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             ORIENT_LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            ORIENT_SENSOR -> ActivityInfo.SCREEN_ORIENTATION_SENSOR
             else -> if (detectNaturalLandscape()) {
                 ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             } else {
@@ -450,7 +449,6 @@ class MainActivity : AppCompatActivity() {
         val btnOrientAuto = dialog.findViewById<Button>(R.id.btnOrientAuto)
         val btnOrientLandscape = dialog.findViewById<Button>(R.id.btnOrientLandscape)
         val btnOrientPortrait = dialog.findViewById<Button>(R.id.btnOrientPortrait)
-        val btnOrientSensor = dialog.findViewById<Button>(R.id.btnOrientSensor)
         val tvOrientHint = dialog.findViewById<TextView>(R.id.tvOrientHint)
         val cbKeepScreenOn = dialog.findViewById<CheckBox>(R.id.cbKeepScreenOn)
 
@@ -458,7 +456,7 @@ class MainActivity : AppCompatActivity() {
         val btnSettingsSave = dialog.findViewById<Button>(R.id.btnSettingsSave)
 
         var draftWifi = isWifiMode
-        var draftOrient = orientationMode
+        var draftOrient = if (orientationMode == ORIENT_PORTRAIT || orientationMode == ORIENT_LANDSCAPE) orientationMode else ORIENT_AUTO
 
         etSetWifiHost.setText(wifiHost)
         etSetWifiPort.setText(wifiPort.toString())
@@ -493,12 +491,10 @@ class MainActivity : AppCompatActivity() {
             styleOrientBtn(btnOrientAuto, draftOrient == ORIENT_AUTO)
             styleOrientBtn(btnOrientLandscape, draftOrient == ORIENT_LANDSCAPE)
             styleOrientBtn(btnOrientPortrait, draftOrient == ORIENT_PORTRAIT)
-            styleOrientBtn(btnOrientSensor, draftOrient == ORIENT_SENSOR)
 
             tvOrientHint.text = when (draftOrient) {
                 ORIENT_LANDSCAPE -> "Горизонтальный 2-колоночный интерфейс для 7\" Android автомагнитол (1024×600 / 1280×720) и планшетов."
                 ORIENT_PORTRAIT -> "Фиксированный вертикальный режим для смартфонов (поворот экрана заблокирован)."
-                ORIENT_SENSOR -> "Свободный поворот экрана по датчику положения (телефон / автомагнитола)."
                 else -> "Авто: смартфон фиксируется вертикально, а 7\" автомагнитола открывается горизонтально в две колонки."
             }
         }
@@ -522,10 +518,6 @@ class MainActivity : AppCompatActivity() {
         }
         btnOrientPortrait.setOnClickListener {
             draftOrient = ORIENT_PORTRAIT
-            refreshOrientUi()
-        }
-        btnOrientSensor.setOnClickListener {
-            draftOrient = ORIENT_SENSOR
             refreshOrientUi()
         }
 
@@ -585,7 +577,7 @@ class MainActivity : AppCompatActivity() {
                         "1. Подключите USB KKL кабель (FT232 / CH340) к порту USB-OTG платы ESP32-S3.\n" +
                         "2. На устройстве подключитесь к Wi-Fi сети ESP32: VENTO-KKL-WIFI (пароль: ventokkl).\n" +
                         "3. Включите зажигание автомобиля и нажмите «ПОДКЛЮЧИТЬ ЭБУ».\n\n" +
-                        "Сменить способ подключения или IP/порт можно в меню «НАСТРОЙКИ».")
+                        "Сменить способ подключения или IP/порт можно по иконке шестерёнки вверху справа.")
             }
         } else {
             tvTransportBadge.text = "USB OTG"
@@ -594,7 +586,7 @@ class MainActivity : AppCompatActivity() {
             if (kwProtocol?.isSessionActive != true) {
                 findUsbAdapter(autoRequestPermission = false)
                 setResultText("Режим прямого подключения через USB KKL кабель.\nПодключите кабель к устройству (смартфону или USB-порту автомагнитолы), включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ».\n\n" +
-                        "Для работы по Wi-Fi (ESP32) откройте «НАСТРОЙКИ».")
+                        "Для работы по Wi-Fi (ESP32) нажмите шестерёнку вверху справа.")
             }
         }
     }
@@ -806,7 +798,7 @@ class MainActivity : AppCompatActivity() {
         val manager = usbManager ?: return
         val dev = findUsbAdapter(autoRequestPermission = false)
         if (dev == null) {
-            setResultText("USB KKL адаптер не обнаружен.\n\n• Подключите кабель через USB-OTG переходник (или к USB автомагнитолы).\n• Либо откройте «НАСТРОЙКИ» и выберите «WI-FI (ESP32)».")
+            setResultText("USB KKL адаптер не обнаружен.\n\n• Подключите кабель через USB-OTG переходник (или к USB автомагнитолы).\n• Либо нажмите шестерёнку вверху справа и выберите «WI-FI (ESP32)».")
             return
         }
 
