@@ -50,6 +50,19 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTabImmo: Button
     private var selectedEcuAddress: Int = 0x01 // 0x01 = Двигатель, 0x25 = Иммобилайзер
 
+    // Выбор транспорта: USB OTG или Wi-Fi (ESP32)
+    private lateinit var btnConnUsb: Button
+    private lateinit var btnConnWifi: Button
+    private lateinit var layoutWifiConfig: LinearLayout
+    private lateinit var etWifiHost: EditText
+    private lateinit var etWifiPort: EditText
+    private var isWifiMode: Boolean = false
+
+    private val PREFS_NAME = "vento_diag_prefs"
+    private val PREF_WIFI_MODE = "use_wifi_esp32"
+    private val PREF_WIFI_HOST = "wifi_esp32_host"
+    private val PREF_WIFI_PORT = "wifi_esp32_port"
+
     // Отдельное окно измерений и осциллограф
     private var measuringDialog: Dialog? = null
     private val selectedScopeChannels = linkedSetOf(SensorChannel.RPM, SensorChannel.LAMBDA)
@@ -129,7 +142,7 @@ class MainActivity : AppCompatActivity() {
 
     // Связь и фоновые потоки
     private var foundDevice: UsbDevice? = null
-    private var kwDriver: Ftdi5BaudDriver? = null
+    private var kwDriver: KLineTransport? = null
     private var kwProtocol: Kw1281Protocol? = null
     private var isReceiverRegistered = false
     private var pendingConnectAfterPermission = false
@@ -147,7 +160,7 @@ class MainActivity : AppCompatActivity() {
 
                     if (granted) {
                         findUsbAdapter(autoRequestPermission = false)
-                        if (shouldConnect) {
+                        if (shouldConnect && !isWifiMode) {
                             connectToSelectedEcu()
                         } else {
                             setResultText("Разрешение на USB адаптер получено. Нажмите «ПОДКЛЮЧИТЬ ЭБУ».")
@@ -157,20 +170,24 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    findUsbAdapter(autoRequestPermission = true)
+                    if (!isWifiMode) {
+                        findUsbAdapter(autoRequestPermission = true)
+                    }
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                     val currentList = usbManager?.deviceList
                     val stillPresent = currentList?.values?.any { isSupportedAdapter(it) } == true
                     if (!stillPresent) {
-                        disconnectSession()
                         foundDevice = null
-                        updateConnectButtonState(connected = false)
-                        setDiagnosticButtonsEnabled(false)
-                        tvStatus.text = "Статус: USB-адаптер отключён"
-                        tvDeviceInfo.text = "Подключите USB-OTG KKL кабель"
-                        setResultText("USB KKL адаптер отключён от смартфона.")
-                    } else {
+                        if (!isWifiMode) {
+                            disconnectSession()
+                            updateConnectButtonState(connected = false)
+                            setDiagnosticButtonsEnabled(false)
+                            tvStatus.text = "Статус: USB-адаптер отключён"
+                            tvDeviceInfo.text = "Подключите USB-OTG KKL кабель"
+                            setResultText("USB KKL адаптер отключён от смартфона.")
+                        }
+                    } else if (!isWifiMode) {
                         findUsbAdapter(autoRequestPermission = false)
                     }
                 }
@@ -195,6 +212,17 @@ class MainActivity : AppCompatActivity() {
 
             btnTabEngine = findViewById(R.id.btnTabEngine)
             btnTabImmo = findViewById(R.id.btnTabImmo)
+
+            btnConnUsb = findViewById(R.id.btnConnUsb)
+            btnConnWifi = findViewById(R.id.btnConnWifi)
+            layoutWifiConfig = findViewById(R.id.layoutWifiConfig)
+            etWifiHost = findViewById(R.id.etWifiHost)
+            etWifiPort = findViewById(R.id.etWifiPort)
+
+            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            isWifiMode = prefs.getBoolean(PREF_WIFI_MODE, false)
+            etWifiHost.setText(prefs.getString(PREF_WIFI_HOST, "192.168.4.1") ?: "192.168.4.1")
+            etWifiPort.setText(prefs.getInt(PREF_WIFI_PORT, 3333).toString())
 
             layoutImmoStatus = findViewById(R.id.layoutImmoStatus)
             tvImmoKeyStatus = findViewById(R.id.tvImmoKeyStatus)
@@ -225,9 +253,11 @@ class MainActivity : AppCompatActivity() {
             btnEcuPassport = findViewById(R.id.btnEcuPassport)
             btnShareReport = findViewById(R.id.btnShareReport)
 
-            // Переключение табов ЭБУ
+            // Переключение табов ЭБУ и способа подключения
             btnTabEngine.setOnClickListener { switchEcuTab(0x01) }
             btnTabImmo.setOnClickListener { switchEcuTab(0x25) }
+            btnConnUsb.setOnClickListener { switchTransportMode(false) }
+            btnConnWifi.setOnClickListener { switchTransportMode(true) }
 
             // Обработчики кнопок
             btnConnectEcu.setOnClickListener { onConnectButtonClicked() }
@@ -260,8 +290,11 @@ class MainActivity : AppCompatActivity() {
             isReceiverRegistered = true
 
             switchEcuTab(0x01)
+            switchTransportMode(isWifiMode, resetSession = false)
             updateConnectButtonState(connected = false)
-            findUsbAdapter(autoRequestPermission = true)
+            if (!isWifiMode) {
+                findUsbAdapter(autoRequestPermission = true)
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -269,7 +302,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (kwProtocol?.isSessionActive != true) {
+        if (!isWifiMode && kwProtocol?.isSessionActive != true) {
             findUsbAdapter(autoRequestPermission = false)
         }
     }
@@ -321,6 +354,48 @@ class MainActivity : AppCompatActivity() {
             btnBasicSettings.visibility = View.GONE
             btnAdaptationOpen.visibility = View.VISIBLE
             tvAdaptHint.text = "Канал 00: привязка ЭБУ двигателя к иммобилайзеру (введите 0 и Сохранить)"
+        }
+    }
+
+    private fun switchTransportMode(wifi: Boolean, resetSession: Boolean = true) {
+        if (resetSession && isWifiMode != wifi) {
+            disconnectSession()
+            setDiagnosticButtonsEnabled(false)
+            updateConnectButtonState(connected = false)
+        }
+        isWifiMode = wifi
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_WIFI_MODE, wifi)
+            .apply()
+
+        if (wifi) {
+            btnConnWifi.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0F766E"))
+            btnConnWifi.setTextColor(Color.WHITE)
+            btnConnUsb.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#334155"))
+            btnConnUsb.setTextColor(Color.parseColor("#94A3B8"))
+            layoutWifiConfig.visibility = View.VISIBLE
+
+            if (kwProtocol?.isSessionActive != true) {
+                val host = etWifiHost.text.toString().trim().ifEmpty { "192.168.4.1" }
+                val port = etWifiPort.text.toString().trim().ifEmpty { "3333" }
+                tvStatus.text = "Статус: Wi-Fi мост ESP32 ($host:$port)"
+                setResultText("Режим беспроводного подключения через ESP32-S3 + USB KKL:\n\n" +
+                        "1. Подключите USB KKL кабель (FT232 / CH340) к порту USB-OTG платы ESP32-S3.\n" +
+                        "2. На телефоне подключитесь к Wi-Fi сети ESP32: VENTO-KKL-WIFI (пароль: ventokkl).\n" +
+                        "3. Включите зажигание автомобиля и нажмите «ПОДКЛЮЧИТЬ ЭБУ».")
+            }
+        } else {
+            btnConnUsb.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0F766E"))
+            btnConnUsb.setTextColor(Color.WHITE)
+            btnConnWifi.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#334155"))
+            btnConnWifi.setTextColor(Color.parseColor("#94A3B8"))
+            layoutWifiConfig.visibility = View.GONE
+
+            if (kwProtocol?.isSessionActive != true) {
+                findUsbAdapter(autoRequestPermission = false)
+                setResultText("Режим прямого подключения через USB-OTG KKL кабель.\nПодключите кабель к телефону, включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ».")
+            }
         }
     }
 
@@ -428,10 +503,118 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun connectToSelectedEcu() {
+        if (isWifiMode) {
+            connectToSelectedEcuViaWifi()
+        } else {
+            connectToSelectedEcuViaUsb()
+        }
+    }
+
+    private fun connectToSelectedEcuViaWifi() {
+        val host = etWifiHost.text.toString().trim().ifEmpty { "192.168.4.1" }
+        val port = etWifiPort.text.toString().trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: 3333
+
+        etWifiHost.setText(host)
+        etWifiPort.setText(port.toString())
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(PREF_WIFI_HOST, host)
+            .putInt(PREF_WIFI_PORT, port)
+            .apply()
+
+        lifecycleScope.launch {
+            try {
+                stopAllBackgroundLoops()
+                layoutActuatorTest.visibility = View.GONE
+                layoutAdaptation.visibility = View.GONE
+                btnConnectEcu.isEnabled = false
+                setDiagnosticButtonsEnabled(false)
+
+                val blockName = if (selectedEcuAddress == 0x25) "Иммобилайзера (0x25)" else "ЭБУ Двигателя (0x01)"
+                tvStatus.text = "Подключение к ESP32 ($host:$port)..."
+                setResultText("Установка Wi-Fi соединения с ESP32 ($host:$port)...")
+
+                disconnectSession()
+                val wifiDriver = WifiEsp32Driver(host, port)
+                if (!wifiDriver.open()) {
+                    tvStatus.text = "ESP32 недоступен по Wi-Fi"
+                    setResultText("${wifiDriver.lastError ?: "Не удалось подключиться к ESP32"}\n\n" +
+                            "• Убедитесь, что телефон подключён к Wi-Fi сети «VENTO-KKL-WIFI».\n" +
+                            "• Если используете домашний роутер, укажите IP-адрес ESP32 и порт 3333.\n" +
+                            "• Проверьте питание платы ESP32-S3.")
+                    btnConnectEcu.isEnabled = true
+                    updateConnectButtonState(connected = false)
+                    return@launch
+                }
+                kwDriver = wifiDriver
+
+                val usbInfo = wifiDriver.queryAdapterInfo()
+                if (usbInfo != null && !usbInfo.usbReady) {
+                    disconnectSession()
+                    tvStatus.text = "ESP32: USB KKL не подключён"
+                    setResultText("Wi-Fi связь с ESP32 установлена ($host:$port), но USB KKL кабель не обнаружен!\n\n" +
+                            "• Подключите KKL кабель (FTDI FT232 / CH340) в разъём USB-OTG платы ESP32-S3.\n" +
+                            "• Проверьте, подаётся ли питание 5В на шину USB Host (светодиод на KKL должен гореть).")
+                    btnConnectEcu.isEnabled = true
+                    updateConnectButtonState(connected = false)
+                    return@launch
+                }
+
+                val adapterSuffix = if (usbInfo != null && usbInfo.usbReady) {
+                    " (USB VID 0x%04X)".format(usbInfo.vendorId)
+                } else ""
+
+                tvStatus.text = "Инициализация $blockName по Wi-Fi..."
+                setResultText("ESP32 готов$adapterSuffix.\nУстановка связи с $blockName (5 бод -> 9600 бод)...")
+
+                val protocol = Kw1281Protocol(wifiDriver)
+                kwProtocol = protocol
+                val success = protocol.connect(selectedEcuAddress) { }
+
+                if (success) {
+                    val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else (if (selectedEcuAddress == 0x25) "1H0 953 257" else "3A0 907 311")
+                    tvStatus.text = "Wi-Fi: $pNum"
+                    tvBaudBadge.text = "${protocol.negotiatedBaud} бод"
+                    btnConnectEcu.isEnabled = true
+                    updateConnectButtonState(connected = true)
+                    setDiagnosticButtonsEnabled(true)
+
+                    if (selectedEcuAddress == 0x25) {
+                        checkImmobilizerStatus(protocol)
+                    } else {
+                        setResultText("Связь с ЭБУ Двигателя по Wi-Fi (ESP32) установлена!\n" +
+                                "• Мост: $host:$port$adapterSuffix\n" +
+                                "• Номер VAG: ${protocol.ecuPartNumber}\n" +
+                                "• Компонент: ${protocol.ecuComponent}\n" +
+                                "• Кодировка: ${protocol.ecuExtra}\n\n" +
+                                "Доступны: Ошибки (07), Измерения (08), Тест исполнителей (04), Базовые (УОЗ 6°) и Адаптация (10).")
+                    }
+                } else {
+                    val errDetail = wifiDriver.lastError?.let { "\nДетали: $it" } ?: ""
+                    disconnectSession()
+                    tvStatus.text = "Нет ответа от блока"
+                    setResultText("Блок $blockName не отвечает через ESP32.$errDetail\n\n" +
+                            "• Проверьте, включено ли зажигание (приборная панель горит).\n" +
+                            "• Проверьте питание +12В на OBD2 разъёме KKL адаптера и контакт K-Line.")
+                    btnConnectEcu.isEnabled = true
+                    updateConnectButtonState(connected = false)
+                }
+            } catch (t: Throwable) {
+                t.printStackTrace()
+                disconnectSession()
+                tvStatus.text = "Сбой Wi-Fi подключения"
+                setResultText("Сбой при Wi-Fi подключении: ${t.message ?: t.javaClass.simpleName}")
+                btnConnectEcu.isEnabled = true
+                updateConnectButtonState(connected = false)
+            }
+        }
+    }
+
+    private fun connectToSelectedEcuViaUsb() {
         val manager = usbManager ?: return
         val dev = findUsbAdapter(autoRequestPermission = false)
         if (dev == null) {
-            setResultText("USB KKL адаптер не обнаружен.\n\n• Подключите кабель через USB-OTG переходник к телефону.\n• На некоторых смартфонах нужно включить «OTG-подключение» в настройках системы.")
+            setResultText("USB KKL адаптер не обнаружен.\n\n• Подключите кабель через USB-OTG переходник к телефону.\n• Либо переключитесь на вкладку «WI-FI (ESP32)» выше.")
             return
         }
 

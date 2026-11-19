@@ -25,15 +25,15 @@ import java.util.ArrayDeque
 class Ftdi5BaudDriver(
     private val usbManager: UsbManager,
     private val device: UsbDevice
-) {
+) : KLineTransport {
     private var connection: UsbDeviceConnection? = null
     private var port: UsbSerialPort? = null
 
     private val rxQueue = ArrayDeque<Byte>()
-    var lastError: String? = null
+    override var lastError: String? = null
         private set
 
-    val isOpen: Boolean
+    override val isOpen: Boolean
         get() = port?.isOpen == true && connection != null
 
     companion object {
@@ -118,9 +118,9 @@ class Ftdi5BaudDriver(
      * Посылка 5-бодовой последовательности инициализации адреса ЭБУ
      * по абсолютному дедлайну согласно спецификации KWP1281 (2000.0 мс на посылку).
      */
-    suspend fun send5BaudInitAddress(
-        address: Int = 0x01,
-        targetBaud: Int = 9600,
+    override suspend fun send5BaudInitAddress(
+        address: Int,
+        targetBaud: Int,
         onLog: (String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         val p = port ?: run {
@@ -207,7 +207,7 @@ class Ftdi5BaudDriver(
     /**
      * Побайтовое чтение из FTDI с таймаутом через 256-байтный буфер
      */
-    suspend fun readByte(timeoutMs: Int): Int = withContext(Dispatchers.IO) {
+    override suspend fun readByte(timeoutMs: Int): Int = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext -1
 
         synchronized(rxQueue) {
@@ -247,7 +247,7 @@ class Ftdi5BaudDriver(
      * Отправка байта с подтверждением инверсией от ЭБУ (~byte)
      * и корректной фильтрацией собственного loopback-эхо K-Line (алгоритм isEchoOrComplement).
      */
-    suspend fun writeByteAndVerifyAck(b: Byte, timeoutMs: Int = 300, maxRetries: Int = 4): Boolean = withContext(Dispatchers.IO) {
+    override suspend fun writeByteAndVerifyAck(b: Byte, timeoutMs: Int, maxRetries: Int): Boolean = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext false
         val sentVal = b.toInt() and 0xFF
         val compExpected = (sentVal xor 0xFF) and 0xFF
@@ -297,7 +297,7 @@ class Ftdi5BaudDriver(
      * Аккуратно поглощает только собственное эхо 0x03; если прочитан другой байт (уже ответ ЭБУ),
      * возвращает его в начало очереди rxQueue.
      */
-    suspend fun sendEndMarker(timeoutMs: Int = 300) = withContext(Dispatchers.IO) {
+    override suspend fun sendEndMarker(timeoutMs: Int) = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext
         try {
             p.write(byteArrayOf(0x03), timeoutMs)
@@ -313,7 +313,7 @@ class Ftdi5BaudDriver(
      * Отправка байта без подтверждения (для инверсии ~KW2 или подтверждения входящего байта).
      * Поглощает только собственное эхо sentVal; любой иной байт возвращается в очередь.
      */
-    suspend fun writeRawByte(b: Byte, timeoutMs: Int = 300) = withContext(Dispatchers.IO) {
+    override suspend fun writeRawByte(b: Byte, timeoutMs: Int) = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext
         val sentVal = b.toInt() and 0xFF
         try {
@@ -325,7 +325,7 @@ class Ftdi5BaudDriver(
         } catch (t: Throwable) {}
     }
 
-    fun clearBuffers() {
+    override fun clearBuffers() {
         synchronized(rxQueue) {
             rxQueue.clear()
         }
@@ -334,7 +334,7 @@ class Ftdi5BaudDriver(
         } catch (t: Throwable) {}
     }
 
-    fun close() {
+    override fun close() {
         synchronized(rxQueue) {
             rxQueue.clear()
         }

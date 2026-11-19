@@ -21,7 +21,7 @@ import kotlin.math.roundToInt
  * на каждый запрос тестера ЭБУ отвечает ровно одним блоком,
  * и каждый публичный метод под busMutex начинается и заканчивается в очереди тестера.
  */
-class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
+class Kw1281Protocol(private val driver: KLineTransport) {
 
     var blockCounter: Int = 0
     var ecuPartNumber: String = ""

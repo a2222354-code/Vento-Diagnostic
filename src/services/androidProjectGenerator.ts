@@ -8,7 +8,7 @@ import JSZip from 'jszip';
 export interface AndroidProjectFile {
   path: string;
   filename: string;
-  language: 'kotlin' | 'xml' | 'groovy' | 'markdown' | 'yaml' | 'properties';
+  language: 'kotlin' | 'xml' | 'groovy' | 'markdown' | 'yaml' | 'properties' | 'cpp';
   description: string;
   content: string;
 }
@@ -68,6 +68,417 @@ jobs:
 `
   },
   {
+    path: 'app/src/main/java/com/vag/kw1281/KLineTransport.kt',
+    filename: 'KLineTransport.kt',
+    language: 'kotlin',
+    description: 'Единый интерфейс транспорта K-Line (USB OTG и Wi-Fi ESP32)',
+    content: `package com.vag.kw1281
+
+/**
+ * Общий транспортный интерфейс шины K-Line для протокола KWP1281.
+ * Позволяет работать как напрямую через USB-OTG (FTDI/CH340),
+ * так и через Wi-Fi мост на базе ESP32 с подключённым USB KKL кабелем.
+ */
+interface KLineTransport {
+    val isOpen: Boolean
+    val lastError: String?
+
+    suspend fun send5BaudInitAddress(
+        address: Int = 0x01,
+        targetBaud: Int = 9600,
+        onLog: (String) -> Unit
+    ): Boolean
+
+    suspend fun readByte(timeoutMs: Int): Int
+
+    suspend fun writeByteAndVerifyAck(
+        b: Byte,
+        timeoutMs: Int = 300,
+        maxRetries: Int = 4
+    ): Boolean
+
+    suspend fun sendEndMarker(timeoutMs: Int = 300)
+
+    suspend fun writeRawByte(b: Byte, timeoutMs: Int = 300)
+
+    fun clearBuffers()
+
+    fun close()
+}
+`
+  },
+  {
+    path: 'app/src/main/java/com/vag/kw1281/WifiEsp32Driver.kt',
+    filename: 'WifiEsp32Driver.kt',
+    language: 'kotlin',
+    description: 'TCP Wi-Fi драйвер связи с ESP32-S3 и подключённым USB KKL кабелем',
+    content: `package com.vag.kw1281
+
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.io.BufferedInputStream
+import java.io.OutputStream
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.util.ArrayDeque
+
+/**
+ * Wi-Fi TCP драйвер для связи с ESP32-S3, к которому по USB подключён KKL-кабель.
+ *
+ * Бинарный протокол поверх TCP (порт по умолчанию 3333, TCP_NODELAY):
+ * Запросы Android -> ESP32:
+ *   [0xAA, 0x01, addr, baudHi, baudLo]  -> 5-бодовая инициализация на стороне ESP32
+ *   [0xAA, 0x02, len, data...]          -> Отправка байтов в USB KKL (1..240 байт)
+ *   [0xAA, 0x03]                        -> Очистка USB/UART буферов
+ *   [0xAA, 0x04]                        -> Запрос статуса подключённого USB KKL кабеля
+ *
+ * Ответы ESP32 -> Android:
+ *   [0xAA, 0x81, status, errCode]       -> Результат 5-бодовой инициализации (1=OK, 0=ERR)
+ *   [0xAA, 0x82, len, data...]          -> Принятые байты с линии K-Line
+ *   [0xAA, 0x84, usbReady, vidH, vidL, pidH, pidL] -> Информация о USB KKL на ESP32
+ */
+class WifiEsp32Driver(
+    private val host: String,
+    private val port: Int = 3333
+) : KLineTransport {
+
+    data class Esp32UsbInfo(
+        val usbReady: Boolean,
+        val vendorId: Int,
+        val productId: Int
+    )
+
+    private var socket: Socket? = null
+    private var outputStream: OutputStream? = null
+    private var readerJob: Job? = null
+    private val driverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val rxQueue = ArrayDeque<Byte>()
+    private val rxSignal = Channel<Unit>(Channel.CONFLATED)
+    private val writeLock = Any()
+
+    @Volatile
+    private var pending5BaudResult: CompletableDeferred<Pair<Boolean, Int>>? = null
+
+    @Volatile
+    private var pendingInfoResult: CompletableDeferred<Esp32UsbInfo>? = null
+
+    override var lastError: String? = null
+        private set
+
+    override val isOpen: Boolean
+        get() = socket?.let { it.isConnected && !it.isClosed } == true
+
+    companion object {
+        private const val MAGIC = 0xAA
+        private const val CMD_5BAUD_INIT = 0x01
+        private const val CMD_TX_DATA = 0x02
+        private const val CMD_CLEAR_BUF = 0x03
+        private const val CMD_PING_INFO = 0x04
+
+        private const val RSP_5BAUD_DONE = 0x81
+        private const val RSP_RX_DATA = 0x82
+        private const val RSP_INFO = 0x84
+    }
+
+    suspend fun open(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            close()
+            lastError = null
+
+            val s = Socket()
+            s.tcpNoDelay = true
+            s.keepAlive = true
+            s.connect(InetSocketAddress(host, port), 3500)
+
+            socket = s
+            outputStream = s.getOutputStream()
+
+            val input = BufferedInputStream(s.getInputStream(), 2048)
+            readerJob = driverScope.launch {
+                readLoop(input)
+            }
+            true
+        } catch (t: Throwable) {
+            lastError = "Не удалось подключиться к ESP32 ($host:$port): \${t.message ?: t.javaClass.simpleName}"
+            close()
+            false
+        }
+    }
+
+    private suspend fun readLoop(input: BufferedInputStream) {
+        try {
+            while (driverScope.isActive && isOpen) {
+                val b0 = input.read()
+                if (b0 < 0) break
+                if (b0 != MAGIC) continue
+
+                val type = input.read()
+                if (type < 0) break
+
+                when (type) {
+                    RSP_RX_DATA -> {
+                        val len = input.read()
+                        if (len < 0) break
+                        if (len > 0) {
+                            val buf = ByteArray(len)
+                            var offset = 0
+                            while (offset < len) {
+                                val r = input.read(buf, offset, len - offset)
+                                if (r < 0) return
+                                offset += r
+                            }
+                            synchronized(rxQueue) {
+                                for (byteVal in buf) {
+                                    rxQueue.addLast(byteVal)
+                                }
+                            }
+                            rxSignal.trySend(Unit)
+                        }
+                    }
+                    RSP_5BAUD_DONE -> {
+                        val status = input.read()
+                        val err = input.read()
+                        if (status < 0 || err < 0) break
+                        pending5BaudResult?.complete((status == 1) to err)
+                    }
+                    RSP_INFO -> {
+                        val ready = input.read()
+                        val vh = input.read()
+                        val vl = input.read()
+                        val ph = input.read()
+                        val pl = input.read()
+                        if (ready < 0 || vh < 0 || vl < 0 || ph < 0 || pl < 0) break
+                        val vid = ((vh and 0xFF) shl 8) or (vl and 0xFF)
+                        val pid = ((ph and 0xFF) shl 8) or (pl and 0xFF)
+                        pendingInfoResult?.complete(Esp32UsbInfo(ready == 1, vid, pid))
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            lastError = "Разрыв Wi-Fi соединения с ESP32: \${t.message ?: t.javaClass.simpleName}"
+        } finally {
+            pending5BaudResult?.complete(false to 0xFE)
+            pendingInfoResult?.cancel()
+            rxSignal.trySend(Unit)
+        }
+    }
+
+    private fun sendFrame(frame: ByteArray): Boolean {
+        val out = outputStream ?: return false
+        return try {
+            synchronized(writeLock) {
+                out.write(frame)
+                out.flush()
+            }
+            true
+        } catch (t: Throwable) {
+            lastError = "Ошибка отправки в ESP32: \${t.message}"
+            false
+        }
+    }
+
+    suspend fun queryAdapterInfo(timeoutMs: Int = 1500): Esp32UsbInfo? = withContext(Dispatchers.IO) {
+        if (!isOpen) return@withContext null
+        val deferred = CompletableDeferred<Esp32UsbInfo>()
+        pendingInfoResult = deferred
+        if (!sendFrame(byteArrayOf(MAGIC.toByte(), CMD_PING_INFO.toByte()))) {
+            pendingInfoResult = null
+            return@withContext null
+        }
+        val info = withTimeoutOrNull(timeoutMs.toLong()) { deferred.await() }
+        pendingInfoResult = null
+        info
+    }
+
+    override suspend fun send5BaudInitAddress(
+        address: Int,
+        targetBaud: Int,
+        onLog: (String) -> Unit
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!isOpen) {
+            lastError = "Wi-Fi соединение с ESP32 закрыто"
+            return@withContext false
+        }
+
+        synchronized(rxQueue) {
+            rxQueue.clear()
+        }
+
+        onLog("Wi-Fi ESP32: запуск 5-бодовой инициализации (0x%02X -> %d бод)...".format(address, targetBaud))
+        val deferred = CompletableDeferred<Pair<Boolean, Int>>()
+        pending5BaudResult = deferred
+
+        val frame = byteArrayOf(
+            MAGIC.toByte(),
+            CMD_5BAUD_INIT.toByte(),
+            (address and 0xFF).toByte(),
+            ((targetBaud shr 8) and 0xFF).toByte(),
+            (targetBaud and 0xFF).toByte()
+        )
+        if (!sendFrame(frame)) {
+            pending5BaudResult = null
+            return@withContext false
+        }
+
+        val res = withTimeoutOrNull(4500L) { deferred.await() }
+        pending5BaudResult = null
+
+        if (res == null) {
+            lastError = "Таймаут 5-бодовой инициализации на ESP32"
+            return@withContext false
+        }
+        if (!res.first) {
+            lastError = when (res.second) {
+                1 -> "USB KKL кабель не подключён к порту USB-OTG платы ESP32"
+                2 -> "Неподдерживаемый USB-UART адаптер в ESP32"
+                else -> "Ошибка 5-бодовой посылки на ESP32 (код \${res.second})"
+            }
+            return@withContext false
+        }
+        true
+    }
+
+    private fun unreadByte(b: Int) {
+        synchronized(rxQueue) {
+            rxQueue.addFirst((b and 0xFF).toByte())
+        }
+        rxSignal.trySend(Unit)
+    }
+
+    override suspend fun readByte(timeoutMs: Int): Int = withContext(Dispatchers.IO) {
+        synchronized(rxQueue) {
+            if (rxQueue.isNotEmpty()) {
+                return@withContext rxQueue.removeFirst().toInt() and 0xFF
+            }
+        }
+        if (!isOpen) return@withContext -1
+
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (isOpen) {
+            val remaining = deadline - System.currentTimeMillis()
+            if (remaining <= 0) break
+
+            withTimeoutOrNull(remaining) {
+                rxSignal.receive()
+            }
+
+            synchronized(rxQueue) {
+                if (rxQueue.isNotEmpty()) {
+                    return@withContext rxQueue.removeFirst().toInt() and 0xFF
+                }
+            }
+        }
+        -1
+    }
+
+    override suspend fun writeByteAndVerifyAck(
+        b: Byte,
+        timeoutMs: Int,
+        maxRetries: Int
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!isOpen) return@withContext false
+        val sentVal = b.toInt() and 0xFF
+        val compExpected = (sentVal xor 0xFF) and 0xFF
+        val wifiTimeout = maxOf(timeoutMs, 450)
+
+        for (attempt in 1..maxRetries) {
+            val frame = byteArrayOf(MAGIC.toByte(), CMD_TX_DATA.toByte(), 1, b)
+            if (!sendFrame(frame)) return@withContext false
+
+            val start = System.currentTimeMillis()
+            var gotEcho = false
+
+            while (true) {
+                val remaining = (wifiTimeout - (System.currentTimeMillis() - start)).toInt()
+                if (remaining <= 0) break
+
+                val rx = readByte(remaining)
+                if (rx < 0) break
+
+                if (!gotEcho && rx == sentVal) {
+                    gotEcho = true
+                    continue
+                }
+                if (rx == compExpected) {
+                    delay(2)
+                    return@withContext true
+                }
+                if (rx == sentVal) {
+                    continue
+                }
+            }
+            delay(5)
+        }
+        false
+    }
+
+    override suspend fun sendEndMarker(timeoutMs: Int) = withContext(Dispatchers.IO) {
+        if (!isOpen) return@withContext
+        val frame = byteArrayOf(MAGIC.toByte(), CMD_TX_DATA.toByte(), 1, 0x03)
+        if (sendFrame(frame)) {
+            val rx = readByte(45)
+            if (rx >= 0 && rx != 0x03) {
+                unreadByte(rx)
+            }
+            delay(5)
+        }
+    }
+
+    override suspend fun writeRawByte(b: Byte, timeoutMs: Int) = withContext(Dispatchers.IO) {
+        if (!isOpen) return@withContext
+        val sentVal = b.toInt() and 0xFF
+        val frame = byteArrayOf(MAGIC.toByte(), CMD_TX_DATA.toByte(), 1, b)
+        if (sendFrame(frame)) {
+            val rx = readByte(45)
+            if (rx >= 0 && rx != sentVal) {
+                unreadByte(rx)
+            }
+        }
+    }
+
+    override fun clearBuffers() {
+        synchronized(rxQueue) {
+            rxQueue.clear()
+        }
+        if (isOpen) {
+            driverScope.launch {
+                sendFrame(byteArrayOf(MAGIC.toByte(), CMD_CLEAR_BUF.toByte()))
+            }
+        }
+    }
+
+    override fun close() {
+        synchronized(rxQueue) {
+            rxQueue.clear()
+        }
+        pending5BaudResult?.cancel()
+        pending5BaudResult = null
+        pendingInfoResult?.cancel()
+        pendingInfoResult = null
+        try {
+            readerJob?.cancel()
+        } catch (_: Throwable) {}
+        readerJob = null
+        try {
+            socket?.close()
+        } catch (_: Throwable) {}
+        socket = null
+        outputStream = null
+    }
+}
+`
+  },
+  {
     path: 'app/src/main/java/com/vag/kw1281/Ftdi5BaudDriver.kt',
     filename: 'Ftdi5BaudDriver.kt',
     language: 'kotlin',
@@ -99,15 +510,15 @@ import java.util.ArrayDeque
 class Ftdi5BaudDriver(
     private val usbManager: UsbManager,
     private val device: UsbDevice
-) {
+) : KLineTransport {
     private var connection: UsbDeviceConnection? = null
     private var port: UsbSerialPort? = null
 
     private val rxQueue = ArrayDeque<Byte>()
-    var lastError: String? = null
+    override var lastError: String? = null
         private set
 
-    val isOpen: Boolean
+    override val isOpen: Boolean
         get() = port?.isOpen == true && connection != null
 
     companion object {
@@ -192,9 +603,9 @@ class Ftdi5BaudDriver(
      * Посылка 5-бодовой последовательности инициализации адреса ЭБУ
      * по абсолютному дедлайну согласно спецификации KWP1281 (2000.0 мс на посылку).
      */
-    suspend fun send5BaudInitAddress(
-        address: Int = 0x01,
-        targetBaud: Int = 9600,
+    override suspend fun send5BaudInitAddress(
+        address: Int,
+        targetBaud: Int,
         onLog: (String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         val p = port ?: run {
@@ -281,7 +692,7 @@ class Ftdi5BaudDriver(
     /**
      * Побайтовое чтение из FTDI с таймаутом через 256-байтный буфер
      */
-    suspend fun readByte(timeoutMs: Int): Int = withContext(Dispatchers.IO) {
+    override suspend fun readByte(timeoutMs: Int): Int = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext -1
 
         synchronized(rxQueue) {
@@ -321,7 +732,7 @@ class Ftdi5BaudDriver(
      * Отправка байта с подтверждением инверсией от ЭБУ (~byte)
      * и корректной фильтрацией собственного loopback-эхо K-Line (алгоритм isEchoOrComplement).
      */
-    suspend fun writeByteAndVerifyAck(b: Byte, timeoutMs: Int = 300, maxRetries: Int = 4): Boolean = withContext(Dispatchers.IO) {
+    override suspend fun writeByteAndVerifyAck(b: Byte, timeoutMs: Int, maxRetries: Int): Boolean = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext false
         val sentVal = b.toInt() and 0xFF
         val compExpected = (sentVal xor 0xFF) and 0xFF
@@ -371,7 +782,7 @@ class Ftdi5BaudDriver(
      * Аккуратно поглощает только собственное эхо 0x03; если прочитан другой байт (уже ответ ЭБУ),
      * возвращает его в начало очереди rxQueue.
      */
-    suspend fun sendEndMarker(timeoutMs: Int = 300) = withContext(Dispatchers.IO) {
+    override suspend fun sendEndMarker(timeoutMs: Int) = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext
         try {
             p.write(byteArrayOf(0x03), timeoutMs)
@@ -387,7 +798,7 @@ class Ftdi5BaudDriver(
      * Отправка байта без подтверждения (для инверсии ~KW2 или подтверждения входящего байта).
      * Поглощает только собственное эхо sentVal; любой иной байт возвращается в очередь.
      */
-    suspend fun writeRawByte(b: Byte, timeoutMs: Int = 300) = withContext(Dispatchers.IO) {
+    override suspend fun writeRawByte(b: Byte, timeoutMs: Int) = withContext(Dispatchers.IO) {
         val p = port ?: return@withContext
         val sentVal = b.toInt() and 0xFF
         try {
@@ -399,7 +810,7 @@ class Ftdi5BaudDriver(
         } catch (t: Throwable) {}
     }
 
-    fun clearBuffers() {
+    override fun clearBuffers() {
         synchronized(rxQueue) {
             rxQueue.clear()
         }
@@ -408,7 +819,7 @@ class Ftdi5BaudDriver(
         } catch (t: Throwable) {}
     }
 
-    fun close() {
+    override fun close() {
         synchronized(rxQueue) {
             rxQueue.clear()
         }
@@ -455,7 +866,7 @@ import kotlin.math.roundToInt
  * на каждый запрос тестера ЭБУ отвечает ровно одним блоком,
  * и каждый публичный метод под busMutex начинается и заканчивается в очереди тестера.
  */
-class Kw1281Protocol(private val driver: Ftdi5BaudDriver) {
+class Kw1281Protocol(private val driver: KLineTransport) {
 
     var blockCounter: Int = 0
     var ecuPartNumber: String = ""
@@ -2356,7 +2767,8 @@ class OscilloscopeView @JvmOverloads constructor(
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:layout_marginBottom="8dp">
+        android:baselineAligned="false"
+        android:layout_marginBottom="6dp">
 
         <Button
             android:id="@+id/btnTabEngine"
@@ -2367,11 +2779,15 @@ class OscilloscopeView @JvmOverloads constructor(
             android:minHeight="0dp"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
+            android:breakStrategy="simple"
+            android:hyphenationFrequency="none"
             android:maxLines="2"
             android:text="ДВИГАТЕЛЬ (01)"
             android:textSize="12sp"
@@ -2388,17 +2804,161 @@ class OscilloscopeView @JvmOverloads constructor(
             android:minHeight="0dp"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
+            android:breakStrategy="simple"
+            android:hyphenationFrequency="none"
             android:maxLines="2"
             android:text="ИММОБИЛАЙЗЕР (25)"
             android:textSize="12sp"
             android:textStyle="bold"
             android:backgroundTint="#334155"
             android:textColor="#94A3B8" />
+    </LinearLayout>
+
+    <!-- Transport Mode Switcher: USB OTG vs Wi-Fi ESP32 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:baselineAligned="false"
+        android:layout_marginBottom="6dp">
+
+        <Button
+            android:id="@+id/btnConnUsb"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:minHeight="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
+            android:breakStrategy="simple"
+            android:hyphenationFrequency="none"
+            android:maxLines="2"
+            android:text="USB OTG КАБЕЛЬ"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:backgroundTint="#0F766E"
+            android:textColor="#FFFFFF" />
+
+        <Button
+            android:id="@+id/btnConnWifi"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:minHeight="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
+            android:breakStrategy="simple"
+            android:hyphenationFrequency="none"
+            android:maxLines="2"
+            android:text="WI-FI (ESP32)"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:backgroundTint="#334155"
+            android:textColor="#94A3B8" />
+    </LinearLayout>
+
+    <!-- Wi-Fi ESP32 Bridge Settings Card (visible when Wi-Fi mode selected) -->
+    <LinearLayout
+        android:id="@+id/layoutWifiConfig"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#0F172A"
+        android:padding="8dp"
+        android:layout_marginBottom="6dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="МОСТ ESP32 WI-FI → USB KKL (Сеть: VENTO-KKL-WIFI)"
+            android:textColor="#38BDF8"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="6dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:baselineAligned="false"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="IP:"
+                android:textColor="#94A3B8"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="6dp" />
+
+            <EditText
+                android:id="@+id/etWifiHost"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:background="#1E293B"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:text="192.168.4.1"
+                android:hint="192.168.4.1"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#64748B"
+                android:textSize="13sp"
+                android:typeface="monospace"
+                android:inputType="textUri"
+                android:maxLines="1"
+                android:layout_marginEnd="8dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Порт:"
+                android:textColor="#94A3B8"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="6dp" />
+
+            <EditText
+                android:id="@+id/etWifiPort"
+                android:layout_width="76dp"
+                android:layout_height="40dp"
+                android:background="#1E293B"
+                android:gravity="center"
+                android:text="3333"
+                android:hint="3333"
+                android:textColor="#38BDF8"
+                android:textColorHint="#64748B"
+                android:textSize="13sp"
+                android:typeface="monospace"
+                android:inputType="number"
+                android:maxLength="5"
+                android:maxLines="1" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- Status Card -->
@@ -2511,6 +3071,7 @@ class OscilloscopeView @JvmOverloads constructor(
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
+            android:baselineAligned="false"
             android:layout_marginTop="8dp">
 
             <Button
@@ -2527,6 +3088,8 @@ class OscilloscopeView @JvmOverloads constructor(
                 android:paddingTop="4dp"
                 android:paddingBottom="4dp"
                 android:gravity="center"
+                android:textAlignment="center"
+                android:letterSpacing="0.02"
                 android:maxLines="2"
                 android:text="СЛЕДУЮЩИЙ ТЕСТ"
                 android:textSize="12sp"
@@ -2548,6 +3111,8 @@ class OscilloscopeView @JvmOverloads constructor(
                 android:paddingTop="4dp"
                 android:paddingBottom="4dp"
                 android:gravity="center"
+                android:textAlignment="center"
+                android:letterSpacing="0.02"
                 android:maxLines="2"
                 android:text="ЗАВЕРШИТЬ"
                 android:textSize="12sp"
@@ -2659,7 +3224,8 @@ class OscilloscopeView @JvmOverloads constructor(
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
+            android:orientation="horizontal"
+            android:baselineAligned="false">
 
             <Button
                 android:id="@+id/btnAdaptRead"
@@ -2675,6 +3241,8 @@ class OscilloscopeView @JvmOverloads constructor(
                 android:paddingTop="4dp"
                 android:paddingBottom="4dp"
                 android:gravity="center"
+                android:textAlignment="center"
+                android:letterSpacing="0.02"
                 android:maxLines="2"
                 android:text="ЧИТАТЬ"
                 android:textSize="12sp"
@@ -2696,6 +3264,8 @@ class OscilloscopeView @JvmOverloads constructor(
                 android:paddingTop="4dp"
                 android:paddingBottom="4dp"
                 android:gravity="center"
+                android:textAlignment="center"
+                android:letterSpacing="0.02"
                 android:maxLines="2"
                 android:text="СОХРАНИТЬ"
                 android:textSize="12sp"
@@ -2706,7 +3276,7 @@ class OscilloscopeView @JvmOverloads constructor(
     </LinearLayout>
 
     <!-- Main Action Buttons (Uniform 54dp height and uniform 12sp font across all buttons) -->
-    <!-- Row 1: Full-width Connect button (auto-detects USB KKL) -->
+    <!-- Row 1: Full-width Connect button (USB OTG or Wi-Fi ESP32) -->
     <Button
         android:id="@+id/btnConnectEcu"
         android:layout_width="match_parent"
@@ -2720,6 +3290,8 @@ class OscilloscopeView @JvmOverloads constructor(
         android:paddingTop="4dp"
         android:paddingBottom="4dp"
         android:gravity="center"
+        android:textAlignment="center"
+        android:letterSpacing="0.02"
         android:maxLines="2"
         android:text="ПОДКЛЮЧИТЬ ЭБУ"
         android:textSize="12sp"
@@ -2732,6 +3304,7 @@ class OscilloscopeView @JvmOverloads constructor(
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:baselineAligned="false"
         android:layout_marginBottom="6dp">
 
         <Button
@@ -2748,6 +3321,8 @@ class OscilloscopeView @JvmOverloads constructor(
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="ОШИБКИ (07)"
             android:textSize="12sp"
@@ -2770,6 +3345,8 @@ class OscilloscopeView @JvmOverloads constructor(
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="СТЕРЕТЬ (05)"
             android:textSize="12sp"
@@ -2785,6 +3362,7 @@ class OscilloscopeView @JvmOverloads constructor(
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:baselineAligned="false"
         android:layout_marginBottom="6dp">
 
         <Button
@@ -2801,6 +3379,8 @@ class OscilloscopeView @JvmOverloads constructor(
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="ИЗМЕРЕНИЯ (08)"
             android:textSize="12sp"
@@ -2823,6 +3403,8 @@ class OscilloscopeView @JvmOverloads constructor(
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="ИСПОЛНИТЕЛИ (04)"
             android:textSize="12sp"
@@ -2837,6 +3419,7 @@ class OscilloscopeView @JvmOverloads constructor(
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:baselineAligned="false"
         android:layout_marginBottom="6dp">
 
         <Button
@@ -2853,6 +3436,8 @@ class OscilloscopeView @JvmOverloads constructor(
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="БАЗОВЫЕ (УОЗ 6°)"
             android:textSize="12sp"
@@ -2875,6 +3460,8 @@ class OscilloscopeView @JvmOverloads constructor(
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="АДАПТАЦИЯ (10)"
             android:textSize="12sp"
@@ -2889,6 +3476,7 @@ class OscilloscopeView @JvmOverloads constructor(
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:baselineAligned="false"
         android:layout_marginBottom="8dp">
 
         <Button
@@ -2905,6 +3493,8 @@ class OscilloscopeView @JvmOverloads constructor(
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="ПАСПОРТ ЭБУ"
             android:textSize="12sp"
@@ -2927,6 +3517,8 @@ class OscilloscopeView @JvmOverloads constructor(
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="КОПИРОВАТЬ ОТЧЁТ"
             android:textSize="12sp"
@@ -3859,6 +4451,19 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTabImmo: Button
     private var selectedEcuAddress: Int = 0x01 // 0x01 = Двигатель, 0x25 = Иммобилайзер
 
+    // Выбор транспорта: USB OTG или Wi-Fi (ESP32)
+    private lateinit var btnConnUsb: Button
+    private lateinit var btnConnWifi: Button
+    private lateinit var layoutWifiConfig: LinearLayout
+    private lateinit var etWifiHost: EditText
+    private lateinit var etWifiPort: EditText
+    private var isWifiMode: Boolean = false
+
+    private val PREFS_NAME = "vento_diag_prefs"
+    private val PREF_WIFI_MODE = "use_wifi_esp32"
+    private val PREF_WIFI_HOST = "wifi_esp32_host"
+    private val PREF_WIFI_PORT = "wifi_esp32_port"
+
     // Отдельное окно измерений и осциллограф
     private var measuringDialog: Dialog? = null
     private val selectedScopeChannels = linkedSetOf(SensorChannel.RPM, SensorChannel.LAMBDA)
@@ -3938,7 +4543,7 @@ class MainActivity : AppCompatActivity() {
 
     // Связь и фоновые потоки
     private var foundDevice: UsbDevice? = null
-    private var kwDriver: Ftdi5BaudDriver? = null
+    private var kwDriver: KLineTransport? = null
     private var kwProtocol: Kw1281Protocol? = null
     private var isReceiverRegistered = false
     private var pendingConnectAfterPermission = false
@@ -3956,7 +4561,7 @@ class MainActivity : AppCompatActivity() {
 
                     if (granted) {
                         findUsbAdapter(autoRequestPermission = false)
-                        if (shouldConnect) {
+                        if (shouldConnect && !isWifiMode) {
                             connectToSelectedEcu()
                         } else {
                             setResultText("Разрешение на USB адаптер получено. Нажмите «ПОДКЛЮЧИТЬ ЭБУ».")
@@ -3966,20 +4571,24 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    findUsbAdapter(autoRequestPermission = true)
+                    if (!isWifiMode) {
+                        findUsbAdapter(autoRequestPermission = true)
+                    }
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                     val currentList = usbManager?.deviceList
                     val stillPresent = currentList?.values?.any { isSupportedAdapter(it) } == true
                     if (!stillPresent) {
-                        disconnectSession()
                         foundDevice = null
-                        updateConnectButtonState(connected = false)
-                        setDiagnosticButtonsEnabled(false)
-                        tvStatus.text = "Статус: USB-адаптер отключён"
-                        tvDeviceInfo.text = "Подключите USB-OTG KKL кабель"
-                        setResultText("USB KKL адаптер отключён от смартфона.")
-                    } else {
+                        if (!isWifiMode) {
+                            disconnectSession()
+                            updateConnectButtonState(connected = false)
+                            setDiagnosticButtonsEnabled(false)
+                            tvStatus.text = "Статус: USB-адаптер отключён"
+                            tvDeviceInfo.text = "Подключите USB-OTG KKL кабель"
+                            setResultText("USB KKL адаптер отключён от смартфона.")
+                        }
+                    } else if (!isWifiMode) {
                         findUsbAdapter(autoRequestPermission = false)
                     }
                 }
@@ -4004,6 +4613,17 @@ class MainActivity : AppCompatActivity() {
 
             btnTabEngine = findViewById(R.id.btnTabEngine)
             btnTabImmo = findViewById(R.id.btnTabImmo)
+
+            btnConnUsb = findViewById(R.id.btnConnUsb)
+            btnConnWifi = findViewById(R.id.btnConnWifi)
+            layoutWifiConfig = findViewById(R.id.layoutWifiConfig)
+            etWifiHost = findViewById(R.id.etWifiHost)
+            etWifiPort = findViewById(R.id.etWifiPort)
+
+            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            isWifiMode = prefs.getBoolean(PREF_WIFI_MODE, false)
+            etWifiHost.setText(prefs.getString(PREF_WIFI_HOST, "192.168.4.1") ?: "192.168.4.1")
+            etWifiPort.setText(prefs.getInt(PREF_WIFI_PORT, 3333).toString())
 
             layoutImmoStatus = findViewById(R.id.layoutImmoStatus)
             tvImmoKeyStatus = findViewById(R.id.tvImmoKeyStatus)
@@ -4034,9 +4654,11 @@ class MainActivity : AppCompatActivity() {
             btnEcuPassport = findViewById(R.id.btnEcuPassport)
             btnShareReport = findViewById(R.id.btnShareReport)
 
-            // Переключение табов ЭБУ
+            // Переключение табов ЭБУ и способа подключения
             btnTabEngine.setOnClickListener { switchEcuTab(0x01) }
             btnTabImmo.setOnClickListener { switchEcuTab(0x25) }
+            btnConnUsb.setOnClickListener { switchTransportMode(false) }
+            btnConnWifi.setOnClickListener { switchTransportMode(true) }
 
             // Обработчики кнопок
             btnConnectEcu.setOnClickListener { onConnectButtonClicked() }
@@ -4069,8 +4691,11 @@ class MainActivity : AppCompatActivity() {
             isReceiverRegistered = true
 
             switchEcuTab(0x01)
+            switchTransportMode(isWifiMode, resetSession = false)
             updateConnectButtonState(connected = false)
-            findUsbAdapter(autoRequestPermission = true)
+            if (!isWifiMode) {
+                findUsbAdapter(autoRequestPermission = true)
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -4078,7 +4703,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (kwProtocol?.isSessionActive != true) {
+        if (!isWifiMode && kwProtocol?.isSessionActive != true) {
             findUsbAdapter(autoRequestPermission = false)
         }
     }
@@ -4130,6 +4755,48 @@ class MainActivity : AppCompatActivity() {
             btnBasicSettings.visibility = View.GONE
             btnAdaptationOpen.visibility = View.VISIBLE
             tvAdaptHint.text = "Канал 00: привязка ЭБУ двигателя к иммобилайзеру (введите 0 и Сохранить)"
+        }
+    }
+
+    private fun switchTransportMode(wifi: Boolean, resetSession: Boolean = true) {
+        if (resetSession && isWifiMode != wifi) {
+            disconnectSession()
+            setDiagnosticButtonsEnabled(false)
+            updateConnectButtonState(connected = false)
+        }
+        isWifiMode = wifi
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_WIFI_MODE, wifi)
+            .apply()
+
+        if (wifi) {
+            btnConnWifi.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0F766E"))
+            btnConnWifi.setTextColor(Color.WHITE)
+            btnConnUsb.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#334155"))
+            btnConnUsb.setTextColor(Color.parseColor("#94A3B8"))
+            layoutWifiConfig.visibility = View.VISIBLE
+
+            if (kwProtocol?.isSessionActive != true) {
+                val host = etWifiHost.text.toString().trim().ifEmpty { "192.168.4.1" }
+                val port = etWifiPort.text.toString().trim().ifEmpty { "3333" }
+                tvStatus.text = "Статус: Wi-Fi мост ESP32 ($host:$port)"
+                setResultText("Режим беспроводного подключения через ESP32-S3 + USB KKL:\\n\\n" +
+                        "1. Подключите USB KKL кабель (FT232 / CH340) к порту USB-OTG платы ESP32-S3.\\n" +
+                        "2. На телефоне подключитесь к Wi-Fi сети ESP32: VENTO-KKL-WIFI (пароль: ventokkl).\\n" +
+                        "3. Включите зажигание автомобиля и нажмите «ПОДКЛЮЧИТЬ ЭБУ».")
+            }
+        } else {
+            btnConnUsb.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0F766E"))
+            btnConnUsb.setTextColor(Color.WHITE)
+            btnConnWifi.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#334155"))
+            btnConnWifi.setTextColor(Color.parseColor("#94A3B8"))
+            layoutWifiConfig.visibility = View.GONE
+
+            if (kwProtocol?.isSessionActive != true) {
+                findUsbAdapter(autoRequestPermission = false)
+                setResultText("Режим прямого подключения через USB-OTG KKL кабель.\\nПодключите кабель к телефону, включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ».")
+            }
         }
     }
 
@@ -4237,10 +4904,118 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun connectToSelectedEcu() {
+        if (isWifiMode) {
+            connectToSelectedEcuViaWifi()
+        } else {
+            connectToSelectedEcuViaUsb()
+        }
+    }
+
+    private fun connectToSelectedEcuViaWifi() {
+        val host = etWifiHost.text.toString().trim().ifEmpty { "192.168.4.1" }
+        val port = etWifiPort.text.toString().trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: 3333
+
+        etWifiHost.setText(host)
+        etWifiPort.setText(port.toString())
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(PREF_WIFI_HOST, host)
+            .putInt(PREF_WIFI_PORT, port)
+            .apply()
+
+        lifecycleScope.launch {
+            try {
+                stopAllBackgroundLoops()
+                layoutActuatorTest.visibility = View.GONE
+                layoutAdaptation.visibility = View.GONE
+                btnConnectEcu.isEnabled = false
+                setDiagnosticButtonsEnabled(false)
+
+                val blockName = if (selectedEcuAddress == 0x25) "Иммобилайзера (0x25)" else "ЭБУ Двигателя (0x01)"
+                tvStatus.text = "Подключение к ESP32 ($host:$port)..."
+                setResultText("Установка Wi-Fi соединения с ESP32 ($host:$port)...")
+
+                disconnectSession()
+                val wifiDriver = WifiEsp32Driver(host, port)
+                if (!wifiDriver.open()) {
+                    tvStatus.text = "ESP32 недоступен по Wi-Fi"
+                    setResultText("\${wifiDriver.lastError ?: "Не удалось подключиться к ESP32"}\\n\\n" +
+                            "• Убедитесь, что телефон подключён к Wi-Fi сети «VENTO-KKL-WIFI».\\n" +
+                            "• Если используете домашний роутер, укажите IP-адрес ESP32 и порт 3333.\\n" +
+                            "• Проверьте питание платы ESP32-S3.")
+                    btnConnectEcu.isEnabled = true
+                    updateConnectButtonState(connected = false)
+                    return@launch
+                }
+                kwDriver = wifiDriver
+
+                val usbInfo = wifiDriver.queryAdapterInfo()
+                if (usbInfo != null && !usbInfo.usbReady) {
+                    disconnectSession()
+                    tvStatus.text = "ESP32: USB KKL не подключён"
+                    setResultText("Wi-Fi связь с ESP32 установлена ($host:$port), но USB KKL кабель не обнаружен!\\n\\n" +
+                            "• Подключите KKL кабель (FTDI FT232 / CH340) в разъём USB-OTG платы ESP32-S3.\\n" +
+                            "• Проверьте, подаётся ли питание 5В на шину USB Host (светодиод на KKL должен гореть).")
+                    btnConnectEcu.isEnabled = true
+                    updateConnectButtonState(connected = false)
+                    return@launch
+                }
+
+                val adapterSuffix = if (usbInfo != null && usbInfo.usbReady) {
+                    " (USB VID 0x%04X)".format(usbInfo.vendorId)
+                } else ""
+
+                tvStatus.text = "Инициализация $blockName по Wi-Fi..."
+                setResultText("ESP32 готов$adapterSuffix.\\nУстановка связи с $blockName (5 бод -> 9600 бод)...")
+
+                val protocol = Kw1281Protocol(wifiDriver)
+                kwProtocol = protocol
+                val success = protocol.connect(selectedEcuAddress) { }
+
+                if (success) {
+                    val pNum = if (protocol.ecuPartNumber.isNotEmpty()) protocol.ecuPartNumber else (if (selectedEcuAddress == 0x25) "1H0 953 257" else "3A0 907 311")
+                    tvStatus.text = "Wi-Fi: $pNum"
+                    tvBaudBadge.text = "\${protocol.negotiatedBaud} бод"
+                    btnConnectEcu.isEnabled = true
+                    updateConnectButtonState(connected = true)
+                    setDiagnosticButtonsEnabled(true)
+
+                    if (selectedEcuAddress == 0x25) {
+                        checkImmobilizerStatus(protocol)
+                    } else {
+                        setResultText("Связь с ЭБУ Двигателя по Wi-Fi (ESP32) установлена!\\n" +
+                                "• Мост: $host:$port$adapterSuffix\\n" +
+                                "• Номер VAG: \${protocol.ecuPartNumber}\\n" +
+                                "• Компонент: \${protocol.ecuComponent}\\n" +
+                                "• Кодировка: \${protocol.ecuExtra}\\n\\n" +
+                                "Доступны: Ошибки (07), Измерения (08), Тест исполнителей (04), Базовые (УОЗ 6°) и Адаптация (10).")
+                    }
+                } else {
+                    val errDetail = wifiDriver.lastError?.let { "\\nДетали: $it" } ?: ""
+                    disconnectSession()
+                    tvStatus.text = "Нет ответа от блока"
+                    setResultText("Блок $blockName не отвечает через ESP32.$errDetail\\n\\n" +
+                            "• Проверьте, включено ли зажигание (приборная панель горит).\\n" +
+                            "• Проверьте питание +12В на OBD2 разъёме KKL адаптера и контакт K-Line.")
+                    btnConnectEcu.isEnabled = true
+                    updateConnectButtonState(connected = false)
+                }
+            } catch (t: Throwable) {
+                t.printStackTrace()
+                disconnectSession()
+                tvStatus.text = "Сбой Wi-Fi подключения"
+                setResultText("Сбой при Wi-Fi подключении: \${t.message ?: t.javaClass.simpleName}")
+                btnConnectEcu.isEnabled = true
+                updateConnectButtonState(connected = false)
+            }
+        }
+    }
+
+    private fun connectToSelectedEcuViaUsb() {
         val manager = usbManager ?: return
         val dev = findUsbAdapter(autoRequestPermission = false)
         if (dev == null) {
-            setResultText("USB KKL адаптер не обнаружен.\\n\\n• Подключите кабель через USB-OTG переходник к телефону.\\n• На некоторых смартфонах нужно включить «OTG-подключение» в настройках системы.")
+            setResultText("USB KKL адаптер не обнаружен.\\n\\n• Подключите кабель через USB-OTG переходник к телефону.\\n• Либо переключитесь на вкладку «WI-FI (ESP32)» выше.")
             return
         }
 
@@ -5142,13 +5917,17 @@ class MainActivity : AppCompatActivity() {
     content: `<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-feature android:name="android.hardware.usb.host" android:required="true" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:label="Vento Diagnostic"
+        android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Material3.Dark">
 
@@ -5163,7 +5942,7 @@ class MainActivity : AppCompatActivity() {
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Автоматический запуск при подключении USB KKL адаптера -->
+            <!-- Auto-launch when KKL USB adapter is plugged in via OTG -->
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
             </intent-filter>
@@ -5320,6 +6099,702 @@ kotlin.daemon.jvmargs=-Xmx2048m
 <resources>
     <string name="app_name">Vento Diagnostic</string>
 </resources>
+`
+  },
+  {
+    path: 'esp32/esp32_kkl_wifi_bridge/esp32_kkl_wifi_bridge.ino',
+    filename: 'esp32_kkl_wifi_bridge.ino',
+    language: 'cpp',
+    description: 'Прошивка ESP32-S3 (USB Host OTG -> Wi-Fi TCP мост для кабеля KKL FT232/CH340/CP2102)',
+    content: `/*
+ * VAG KWP1281 Wi-Fi <-> USB KKL Bridge для ESP32-S3 (Native USB Host OTG)
+ * Совместим с Android-приложением "Vento Diagnostic" (VW Vento 1995 1.8 ADZ / Mono-Motronic 1.2.3)
+ *
+ * Аппаратная часть:
+ *   Плата: ESP32-S3 (со встроенным USB OTG Host, например ESP32-S3-DevKitC-1 / N16R8)
+ *   Кабель: KKL VAG-COM 409.1 USB (FTDI FT232RL/RQ, WCH CH340, Silicon Labs CP2102)
+ *   Подключение:
+ *     1. KKL USB кабель подключается через OTG-переходник к порту USB-OTG платы ESP32-S3.
+ *     2. Питание +5V на шину VBUS OTG (на DevKitC обычно через второй порт UART/5V или перемычку VBUS/5V-IN).
+ *     3. KKL вставляется в OBD-II разъём автомобиля (питание 12В берётся с авто).
+ *
+ * Настройки Arduino IDE (инструменты):
+ *   Board: "ESP32S3 Dev Module"
+ *   USB Mode: "Hardware CDC and JTAG" (чтобы порт USB-OTG был свободен для режима Host)
+ *   USB CDC On Boot: "Disabled" (или через UART0 порт для логов Serial)
+ *
+ * Подключение со смартфона:
+ *   Wi-Fi сеть (Точка доступа ESP32): SSID = "VENTO-KKL-WIFI", Пароль = "ventokkl"
+ *   TCP Адрес: 192.168.4.1, Порт: 3333
+ */
+
+#include <WiFi.h>
+#include <esp_timer.h>
+#include "usb/usb_host.h"
+
+// ================= НАСТРОЙКИ WI-FI =================
+static const char* AP_SSID = "VENTO-KKL-WIFI";
+static const char* AP_PASS = "ventokkl";
+static const uint16_t TCP_PORT = 3333;
+
+// При необходимости подключения к домашнему роутеру укажите данные ниже:
+static const bool USE_STA_WIFI = false;
+static const char* STA_SSID = "YOUR_ROUTER_SSID";
+static const char* STA_PASS = "YOUR_ROUTER_PASS";
+
+// ================= БИНАРНЫЙ ПРОТОКОЛ =================
+#define PROTO_MAGIC     0xAA
+#define CMD_5BAUD_INIT  0x01
+#define CMD_TX_DATA     0x02
+#define CMD_CLEAR_BUF   0x03
+#define CMD_PING_INFO   0x04
+
+#define RSP_5BAUD_DONE  0x81
+#define RSP_RX_DATA     0x82
+#define RSP_INFO        0x84
+
+enum KklChipType {
+  CHIP_NONE = 0,
+  CHIP_FTDI = 1,   // VID 0x0403
+  CHIP_CH340 = 2,  // VID 0x1A86
+  CHIP_CP210X = 3  // VID 0x10C4
+};
+
+// ================= ГЛОБАЛЬНЫЕ ОБЪЕКТЫ =================
+WiFiServer tcpServer(TCP_PORT);
+WiFiClient tcpClient;
+
+static usb_host_client_handle_t usbClientHandle = nullptr;
+static usb_device_handle_t usbDevHandle = nullptr;
+static volatile bool hasNewUsbDev = false;
+static volatile uint8_t pendingNewDevAddr = 0;
+static volatile bool usbNeedClose = false;
+static volatile bool usbDeviceReady = false;
+
+static KklChipType chipType = CHIP_NONE;
+static uint16_t usbVid = 0;
+static uint16_t usbPid = 0;
+static uint8_t claimedIface = 0;
+static uint8_t epInAddr = 0;
+static uint16_t epInMps = 64;
+static uint8_t epOutAddr = 0;
+
+static usb_transfer_t* ctrlTransfer = nullptr;
+static usb_transfer_t* rxTransfer = nullptr;
+static usb_transfer_t* txTransfer = nullptr;
+static SemaphoreHandle_t ctrlSem = nullptr;
+static SemaphoreHandle_t txSem = nullptr;
+static volatile bool ctrlOk = false;
+
+// Кольцевой буфер приёма UART от KKL кабеля
+#define RX_RING_SIZE 2048
+static uint8_t rxRing[RX_RING_SIZE];
+static volatile uint16_t rxHead = 0;
+static volatile uint16_t rxTail = 0;
+static portMUX_TYPE rxMux = portMUX_INITIALIZER_UNLOCKED;
+
+static void pushRxBytes(const uint8_t* data, size_t len) {
+  if (len == 0) return;
+  portENTER_CRITICAL(&rxMux);
+  for (size_t i = 0; i < len; i++) {
+    uint16_t next = (rxHead + 1) % RX_RING_SIZE;
+    if (next != rxTail) {
+      rxRing[rxHead] = data[i];
+      rxHead = next;
+    }
+  }
+  portEXIT_CRITICAL(&rxMux);
+}
+
+static size_t popRxBytes(uint8_t* out, size_t maxLen) {
+  size_t count = 0;
+  portENTER_CRITICAL(&rxMux);
+  while (rxTail != rxHead && count < maxLen) {
+    out[count++] = rxRing[rxTail];
+    rxTail = (rxTail + 1) % RX_RING_SIZE;
+  }
+  portEXIT_CRITICAL(&rxMux);
+  return count;
+}
+
+static void clearRxRing() {
+  portENTER_CRITICAL(&rxMux);
+  rxHead = 0;
+  rxTail = 0;
+  portEXIT_CRITICAL(&rxMux);
+}
+
+// ================= USB CALLBACKS =================
+static void onCtrlComplete(usb_transfer_t* transfer) {
+  ctrlOk = (transfer->status == USB_TRANSFER_STATUS_COMPLETED);
+  if (ctrlSem) xSemaphoreGive(ctrlSem);
+}
+
+static void onTxComplete(usb_transfer_t* transfer) {
+  if (txSem) xSemaphoreGive(txSem);
+}
+
+static void onRxComplete(usb_transfer_t* transfer) {
+  if (transfer->status == USB_TRANSFER_STATUS_COMPLETED && transfer->actual_num_bytes > 0) {
+    if (chipType == CHIP_FTDI) {
+      // FTDI добавляет 2 статусных байта модема в начало каждого Bulk IN пакета
+      if (transfer->actual_num_bytes > 2) {
+        pushRxBytes(transfer->data_buffer + 2, transfer->actual_num_bytes - 2);
+      }
+    } else {
+      pushRxBytes(transfer->data_buffer, transfer->actual_num_bytes);
+    }
+  }
+  if (usbDeviceReady && usbDevHandle != nullptr && transfer->status != USB_TRANSFER_STATUS_CANCELED) {
+    esp_err_t err = usb_host_transfer_submit(transfer);
+    if (err != ESP_OK) {
+      // Будет перезапущено при следующем переподключении USB
+    }
+  }
+}
+
+static void usbClientEventCallback(const usb_host_client_event_msg_t* event_msg, void* arg) {
+  if (event_msg->event == USB_HOST_CLIENT_EVENT_NEW_DEV) {
+    pendingNewDevAddr = event_msg->new_dev.address;
+    hasNewUsbDev = true;
+  } else if (event_msg->event == USB_HOST_CLIENT_EVENT_DEV_GONE) {
+    usbDeviceReady = false;
+    usbNeedClose = true;
+  }
+}
+
+// ================= УПРАВЛЕНИЕ ЧИПАМИ USB-KKL =================
+static bool sendControlTransfer(
+    uint8_t bmRequestType,
+    uint8_t bRequest,
+    uint16_t wValue,
+    uint16_t wIndex,
+    const uint8_t* data = nullptr,
+    uint16_t wLength = 0) {
+  if (!usbDevHandle || !ctrlTransfer || !ctrlSem) return false;
+  if (sizeof(usb_setup_packet_t) + wLength > 64) return false;
+
+  // Сбрасываем семафор перед запуском
+  xSemaphoreTake(ctrlSem, 0);
+
+  usb_setup_packet_t* setup = (usb_setup_packet_t*)ctrlTransfer->data_buffer;
+  setup->bmRequestType = bmRequestType;
+  setup->bRequest = bRequest;
+  setup->wValue = wValue;
+  setup->wIndex = wIndex;
+  setup->wLength = wLength;
+
+  if (data != nullptr && wLength > 0) {
+    memcpy(ctrlTransfer->data_buffer + sizeof(usb_setup_packet_t), data, wLength);
+  }
+
+  ctrlTransfer->device_handle = usbDevHandle;
+  ctrlTransfer->bEndpointAddress = 0;
+  ctrlTransfer->num_bytes = sizeof(usb_setup_packet_t) + wLength;
+  ctrlTransfer->callback = onCtrlComplete;
+  ctrlTransfer->context = nullptr;
+  ctrlOk = false;
+
+  if (usb_host_transfer_submit_control(usbClientHandle, ctrlTransfer) != ESP_OK) {
+    return false;
+  }
+  if (xSemaphoreTake(ctrlSem, pdMS_TO_TICKS(300)) != pdTRUE) {
+    return false;
+  }
+  return ctrlOk;
+}
+
+static bool kklSetBaud(uint16_t baud) {
+  if (chipType == CHIP_FTDI) {
+    // Базовая частота FTDI = 3000000 Гц
+    // 9600 бод: 3000000/9600 = 312.5 -> 0x4138; 10400 бод: 3000000/10400 = 288.46 -> 0x4120
+    uint16_t wValue = (baud == 10400) ? 0x4120 : 0x4138;
+    return sendControlTransfer(0x40, 0x03, wValue, 0x0000);
+  } else if (chipType == CHIP_CH340) {
+    // CH340 clock prescaler 2 (750 kHz): 9600 -> 0xB202, 10400 -> 0xB802
+    uint16_t wIndex = (baud == 10400) ? 0xB802 : 0xB202;
+    return sendControlTransfer(0x40, 0x9A, 0x1312, wIndex);
+  } else if (chipType == CHIP_CP210X) {
+    uint32_t b = baud;
+    return sendControlTransfer(0x41, 0x1E, 0x0000, 0x0000, (const uint8_t*)&b, 4);
+  }
+  return false;
+}
+
+static bool kklSetBreak(bool breakOn) {
+  if (chipType == CHIP_FTDI) {
+    // 8N1 (0x0008) + Bit 14 (0x4000) для Break ON
+    uint16_t wValue = breakOn ? 0x4008 : 0x0008;
+    return sendControlTransfer(0x40, 0x04, wValue, 0x0001);
+  } else if (chipType == CHIP_CH340) {
+    // Регистр 0x05 в CH340: 0x0000 = Break ON, 0x0101 = Break OFF
+    uint16_t wIndex = breakOn ? 0x0000 : 0x0101;
+    return sendControlTransfer(0x40, 0x9A, 0x0505, wIndex);
+  } else if (chipType == CHIP_CP210X) {
+    return sendControlTransfer(0x41, 0x05, breakOn ? 1 : 0, 0x0000);
+  }
+  return false;
+}
+
+static bool kklInitUart(uint16_t baud) {
+  if (chipType == CHIP_FTDI) {
+    sendControlTransfer(0x40, 0x00, 0x0000, 0x0001); // Reset
+    kklSetBaud(baud);
+    sendControlTransfer(0x40, 0x04, 0x0008, 0x0001); // 8N1, Break OFF
+    sendControlTransfer(0x40, 0x01, 0x0303, 0x0001); // DTR=1, RTS=1
+    sendControlTransfer(0x40, 0x09, 0x0001, 0x0001); // Latency Timer = 1 мс
+    return true;
+  } else if (chipType == CHIP_CH340) {
+    sendControlTransfer(0x40, 0xA1, 0x0000, 0x0000);
+    sendControlTransfer(0x40, 0x9A, 0x2518, 0x00C3); // 8N1
+    kklSetBaud(baud);
+    sendControlTransfer(0x40, 0xA4, (uint16_t)~((1 << 5) | (1 << 6)), 0x0000); // DTR+RTS active
+    kklSetBreak(false);
+    return true;
+  } else if (chipType == CHIP_CP210X) {
+    sendControlTransfer(0x41, 0x00, 0x0001, 0x0000); // UART Enable
+    kklSetBaud(baud);
+    sendControlTransfer(0x41, 0x03, 0x0800, 0x0000); // 8N1
+    sendControlTransfer(0x41, 0x07, 0x0303, 0x0000); // DTR=1, RTS=1
+    kklSetBreak(false);
+    return true;
+  }
+  return false;
+}
+
+static void kklPurgeBuffers() {
+  clearRxRing();
+  if (chipType == CHIP_FTDI) {
+    sendControlTransfer(0x40, 0x00, 0x0001, 0x0001); // Purge RX
+    sendControlTransfer(0x40, 0x00, 0x0002, 0x0001); // Purge TX
+  }
+}
+
+static bool kklWriteBytes(const uint8_t* data, size_t len) {
+  if (!usbDeviceReady || !usbDevHandle || !txTransfer || !txSem || len == 0 || len > 250) {
+    return false;
+  }
+  if (xSemaphoreTake(txSem, pdMS_TO_TICKS(200)) != pdTRUE) {
+    return false;
+  }
+  memcpy(txTransfer->data_buffer, data, len);
+  txTransfer->device_handle = usbDevHandle;
+  txTransfer->bEndpointAddress = epOutAddr;
+  txTransfer->num_bytes = len;
+  txTransfer->callback = onTxComplete;
+  txTransfer->context = nullptr;
+
+  esp_err_t err = usb_host_transfer_submit(txTransfer);
+  if (err != ESP_OK) {
+    xSemaphoreGive(txSem);
+    return false;
+  }
+  return true;
+}
+
+// Высокоточная 5-бодовая инициализация (200.0 мс на бит по аппаратному esp_timer)
+static bool execute5BaudInit(uint8_t address, uint16_t targetBaud) {
+  if (!usbDeviceReady) return false;
+
+  kklInitUart(targetBaud);
+  kklSetBreak(false); // Idle HIGH (12В на K-Line)
+  delay(250);
+
+  const int64_t BIT_US = 200000LL; // 200.0 мс
+  int64_t tStart = esp_timer_get_time();
+
+  auto waitDeadline = [&](int stepIndex) {
+    int64_t deadline = tStart + (stepIndex * BIT_US);
+    while (esp_timer_get_time() < deadline) {
+      int64_t remMs = (deadline - esp_timer_get_time()) / 1000LL;
+      if (remMs > 8) {
+        delay((uint32_t)(remMs - 4));
+      }
+    }
+  };
+
+  // 1. Старт-бит: LOW (Break ON)
+  kklSetBreak(true);
+  waitDeadline(1);
+
+  // 2..8. 7 бит адреса (LSB first, 7O1)
+  uint8_t parity = 0;
+  for (int i = 0; i < 7; i++) {
+    uint8_t bit = (address >> i) & 0x01;
+    parity ^= bit;
+    kklSetBreak(bit == 0);
+    waitDeadline(2 + i);
+  }
+
+  // 9. Бит нечётности (Odd parity)
+  uint8_t parityBit = (parity != 0) ? 0 : 1;
+  kklSetBreak(parityBit == 0);
+  waitDeadline(9);
+
+  // 10. Стоп-бит: HIGH (Break OFF)
+  kklSetBreak(false);
+  waitDeadline(10);
+
+  // 11. Пауза 25 мс и переключение в штатный режим 8N1
+  delay(25);
+  kklInitUart(targetBaud);
+  kklPurgeBuffers();
+  return true;
+}
+
+// ================= ОТКРЫТИЕ / ЗАКРЫТИЕ USB УСТРОЙСТВА =================
+static void closeCurrentUsbDevice() {
+  usbDeviceReady = false;
+  chipType = CHIP_NONE;
+  usbVid = 0;
+  usbPid = 0;
+  if (usbDevHandle != nullptr) {
+    usb_host_interface_release(usbClientHandle, usbDevHandle, claimedIface);
+    usb_host_device_close(usbClientHandle, usbDevHandle);
+    usbDevHandle = nullptr;
+  }
+}
+
+static void openNewUsbDevice(uint8_t devAddr) {
+  closeCurrentUsbDevice();
+
+  if (usb_host_device_open(usbClientHandle, devAddr, &usbDevHandle) != ESP_OK) {
+    return;
+  }
+
+  const usb_device_desc_t* devDesc = nullptr;
+  if (usb_host_get_device_descriptor(usbDevHandle, &devDesc) != ESP_OK || devDesc == nullptr) {
+    closeCurrentUsbDevice();
+    return;
+  }
+
+  usbVid = devDesc->idVendor;
+  usbPid = devDesc->idProduct;
+
+  if (usbVid == 0x0403) chipType = CHIP_FTDI;
+  else if (usbVid == 0x1A86) chipType = CHIP_CH340;
+  else if (usbVid == 0x10C4) chipType = CHIP_CP210X;
+  else {
+    Serial.printf("Неподдерживаемое USB устройство: VID=0x%04X PID=0x%04X\\n", usbVid, usbPid);
+    closeCurrentUsbDevice();
+    return;
+  }
+
+  const usb_config_desc_t* configDesc = nullptr;
+  if (usb_host_get_active_config_descriptor(usbDevHandle, &configDesc) != ESP_OK || configDesc == nullptr) {
+    closeCurrentUsbDevice();
+    return;
+  }
+
+  epInAddr = 0;
+  epOutAddr = 0;
+  epInMps = 64;
+  claimedIface = 0;
+  uint8_t curIface = 0;
+
+  uint16_t offset = 0;
+  const uint8_t* raw = (const uint8_t*)configDesc;
+  while (offset < configDesc->wTotalLength) {
+    uint8_t bLen = raw[offset];
+    uint8_t bType = raw[offset + 1];
+    if (bLen == 0) break;
+
+    if (bType == USB_B_DESCRIPTOR_TYPE_INTERFACE) {
+      const usb_intf_desc_t* intf = (const usb_intf_desc_t*)(raw + offset);
+      curIface = intf->bInterfaceNumber;
+    } else if (bType == USB_B_DESCRIPTOR_TYPE_ENDPOINT) {
+      const usb_ep_desc_t* ep = (const usb_ep_desc_t*)(raw + offset);
+      if ((ep->bmAttributes & 0x03) == 0x02) { // Bulk endpoint
+        if ((ep->bEndpointAddress & 0x80) != 0 && epInAddr == 0) {
+          epInAddr = ep->bEndpointAddress;
+          epInMps = ep->wMaxPacketSize;
+          claimedIface = curIface;
+        } else if ((ep->bEndpointAddress & 0x80) == 0 && epOutAddr == 0) {
+          epOutAddr = ep->bEndpointAddress;
+        }
+      }
+    }
+    offset += bLen;
+  }
+
+  if (epInAddr == 0 || epOutAddr == 0) {
+    closeCurrentUsbDevice();
+    return;
+  }
+
+  if (usb_host_interface_claim(usbClientHandle, usbDevHandle, claimedIface, 0) != ESP_OK) {
+    closeCurrentUsbDevice();
+    return;
+  }
+
+  kklInitUart(9600);
+  kklPurgeBuffers();
+  usbDeviceReady = true;
+
+  if (rxTransfer) {
+    usb_host_transfer_free(rxTransfer);
+    rxTransfer = nullptr;
+  }
+  if (usb_host_transfer_alloc(epInMps, 0, &rxTransfer) == ESP_OK) {
+    rxTransfer->device_handle = usbDevHandle;
+    rxTransfer->bEndpointAddress = epInAddr;
+    rxTransfer->num_bytes = epInMps;
+    rxTransfer->callback = onRxComplete;
+    rxTransfer->context = nullptr;
+    usb_host_transfer_submit(rxTransfer);
+  }
+
+  Serial.printf("USB KKL подключён! VID=0x%04X PID=0x%04X (chip=%d)\\n", usbVid, usbPid, (int)chipType);
+}
+
+// ================= ЗАДАЧИ FREERTOS ДЛЯ USB HOST =================
+static void usbHostLibTask(void* arg) {
+  while (true) {
+    uint32_t eventFlags = 0;
+    usb_host_lib_handle_events(portMAX_DELAY, &eventFlags);
+  }
+}
+
+static void usbClientTask(void* arg) {
+  usb_host_client_config_t clientCfg = {
+    .is_synchronous = false,
+    .max_num_event_msg = 5,
+    .async = {
+      .client_event_callback = usbClientEventCallback,
+      .callback_arg = nullptr
+    }
+  };
+  ESP_ERROR_CHECK(usb_host_client_register(&clientCfg, &usbClientHandle));
+
+  while (true) {
+    usb_host_client_handle_events(usbClientHandle, pdMS_TO_TICKS(10));
+    if (hasNewUsbDev) {
+      hasNewUsbDev = false;
+      openNewUsbDevice(pendingNewDevAddr);
+    }
+    if (usbNeedClose) {
+      usbNeedClose = false;
+      closeCurrentUsbDevice();
+      Serial.println("USB KKL отключён.");
+    }
+  }
+}
+
+// ================= ОТПРАВКА КАДРОВ ПО TCP =================
+static void sendTcpInfoResponse() {
+  if (!tcpClient || !tcpClient.connected()) return;
+  uint8_t rsp[7] = {
+    PROTO_MAGIC,
+    RSP_INFO,
+    (uint8_t)(usbDeviceReady ? 1 : 0),
+    (uint8_t)((usbVid >> 8) & 0xFF),
+    (uint8_t)(usbVid & 0xFF),
+    (uint8_t)((usbPid >> 8) & 0xFF),
+    (uint8_t)(usbPid & 0xFF)
+  };
+  tcpClient.write(rsp, sizeof(rsp));
+  tcpClient.flush();
+}
+
+static void sendTcp5BaudResponse(bool ok, uint8_t errCode) {
+  if (!tcpClient || !tcpClient.connected()) return;
+  uint8_t rsp[4] = {
+    PROTO_MAGIC,
+    RSP_5BAUD_DONE,
+    (uint8_t)(ok ? 1 : 0),
+    errCode
+  };
+  tcpClient.write(rsp, sizeof(rsp));
+  tcpClient.flush();
+}
+
+static void forwardUsbRxToTcp() {
+  if (!tcpClient || !tcpClient.connected()) return;
+  uint8_t buf[240];
+  size_t n = popRxBytes(buf, sizeof(buf));
+  if (n > 0) {
+    uint8_t hdr[3] = { PROTO_MAGIC, RSP_RX_DATA, (uint8_t)n };
+    tcpClient.write(hdr, 3);
+    tcpClient.write(buf, n);
+    tcpClient.flush();
+  }
+}
+
+static int readTcpByteBlocking(uint32_t timeoutMs = 200) {
+  uint32_t start = millis();
+  while (tcpClient.connected()) {
+    if (tcpClient.available() > 0) {
+      return tcpClient.read();
+    }
+    if (millis() - start >= timeoutMs) return -1;
+    delay(1);
+  }
+  return -1;
+}
+
+static void handleIncomingTcpCommands() {
+  while (tcpClient && tcpClient.connected() && tcpClient.available() > 0) {
+    int magic = tcpClient.read();
+    if (magic != PROTO_MAGIC) continue;
+
+    int cmd = readTcpByteBlocking();
+    if (cmd < 0) break;
+
+    switch (cmd) {
+      case CMD_5BAUD_INIT: {
+        int addr = readTcpByteBlocking();
+        int bHi = readTcpByteBlocking();
+        int bLo = readTcpByteBlocking();
+        if (addr < 0 || bHi < 0 || bLo < 0) break;
+
+        uint16_t baud = ((uint16_t)(bHi & 0xFF) << 8) | (uint16_t)(bLo & 0xFF);
+        if (!usbDeviceReady) {
+          sendTcp5BaudResponse(false, 1);
+        } else {
+          bool ok = execute5BaudInit((uint8_t)addr, baud);
+          sendTcp5BaudResponse(ok, ok ? 0 : 3);
+        }
+        break;
+      }
+
+      case CMD_TX_DATA: {
+        int len = readTcpByteBlocking();
+        if (len <= 0 || len > 240) break;
+        uint8_t txBuf[240];
+        bool complete = true;
+        for (int i = 0; i < len; i++) {
+          int b = readTcpByteBlocking();
+          if (b < 0) { complete = false; break; }
+          txBuf[i] = (uint8_t)b;
+        }
+        if (complete && usbDeviceReady) {
+          kklWriteBytes(txBuf, (size_t)len);
+        }
+        break;
+      }
+
+      case CMD_CLEAR_BUF: {
+        if (usbDeviceReady) kklPurgeBuffers();
+        else clearRxRing();
+        break;
+      }
+
+      case CMD_PING_INFO: {
+        sendTcpInfoResponse();
+        break;
+      }
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("\\n=== VENTO KWP1281 ESP32-S3 WI-FI BRIDGE ===");
+
+  ctrlSem = xSemaphoreCreateBinary();
+  txSem = xSemaphoreCreateBinary();
+  xSemaphoreGive(txSem);
+
+  usb_host_config_t hostCfg = {
+    .skip_phy_setup = false,
+    .intr_flags = ESP_INTR_FLAG_LEVEL1
+  };
+  ESP_ERROR_CHECK(usb_host_install(&hostCfg));
+
+  ESP_ERROR_CHECK(usb_host_transfer_alloc(64, 0, &ctrlTransfer));
+  ESP_ERROR_CHECK(usb_host_transfer_alloc(256, 0, &txTransfer));
+
+  xTaskCreatePinnedToCore(usbHostLibTask, "usb_host_lib", 4096, nullptr, 5, nullptr, 0);
+  xTaskCreatePinnedToCore(usbClientTask, "usb_client", 4096, nullptr, 5, nullptr, 0);
+
+  if (USE_STA_WIFI) {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(STA_SSID, STA_PASS);
+    Serial.printf("Подключение к Wi-Fi %s", STA_SSID);
+    uint32_t start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 12000) {
+      delay(300);
+      Serial.print(".");
+    }
+    Serial.println();
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.print("IP адрес ESP32: ");
+      Serial.println(WiFi.localIP());
+    }
+  } else {
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(AP_SSID, AP_PASS);
+    Serial.printf("Точка доступа запущена: SSID=%s PASS=%s\\n", AP_SSID, AP_PASS);
+    Serial.print("IP адрес моста: ");
+    Serial.println(WiFi.softAPIP());
+  }
+
+  WiFi.setSleep(false); // Отключаем энергосбережение Wi-Fi для минимальной задержки K-Line
+  tcpServer.begin();
+  tcpServer.setNoDelay(true);
+  Serial.printf("TCP сервер KWP1281 слушает порт %u\\n", TCP_PORT);
+}
+
+void loop() {
+  if (tcpServer.hasClient()) {
+    WiFiClient newClient = tcpServer.available();
+    if (newClient) {
+      if (tcpClient && tcpClient.connected()) {
+        tcpClient.stop();
+      }
+      tcpClient = newClient;
+      tcpClient.setNoDelay(true);
+      clearRxRing();
+      Serial.println("Android клиент подключён по Wi-Fi!");
+    }
+  }
+
+  if (tcpClient && tcpClient.connected()) {
+    handleIncomingTcpCommands();
+    forwardUsbRxToTcp();
+    if (!tcpClient.available() && rxHead == rxTail) {
+      delay(1);
+    }
+  } else if (tcpClient) {
+    tcpClient.stop();
+    if (usbDeviceReady) kklSetBreak(false);
+    Serial.println("Android клиент отключён.");
+    delay(1);
+  } else {
+    delay(1);
+  }
+}
+`
+  },
+  {
+    path: 'esp32/README.md',
+    filename: 'esp32/README.md',
+    language: 'markdown',
+    description: 'Инструкция по прошивке и подключению ESP32-S3 Wi-Fi моста к KKL кабелю',
+    content: `# Wi-Fi мост ESP32-S3 для USB KKL кабеля (KWP1281)
+
+Позволяет диагностировать **VW Vento 1995 1.8 ADZ (Mono-Motronic 1.2.3)** и **Иммобилайзер (1H0 953 257)** без проводов от телефона — по Wi-Fi.
+
+## Схема подключения
+\`\`\`
+[Телефон: Vento Diagnostic]  <-- Wi-Fi (TCP 192.168.4.1:3333) -->  [ESP32-S3]  <-- USB-OTG -->  [USB KKL (FT232/CH340)]  <-->  [OBD-II авто]
+\`\`\`
+
+## Что понадобится
+1. Плата **ESP32-S3** со встроенным USB-OTG Host (например \`ESP32-S3-DevKitC-1\`, \`ESP32-S3 N16R8\`).
+2. Кабель **USB-OTG** (Type-C / Micro-USB Host) для подключения KKL-адаптера к порту \`USB/OTG\` платы ESP32-S3.
+3. Питание \`5В\` (от повербанка, бортового USB-адаптера прикуривателя или второго порта \`UART\` на DevKitC — на некоторых платах DevKitC нужно замкнуть перемычку \`RGB/IN-5V\` или подать \`5V\` на пин \`5V\`, чтобы на порту OTG появилось питание для микросхемы FT232/CH340).
+
+## Прошивка в Arduino IDE
+1. Откройте \`esp32_kkl_wifi_bridge/esp32_kkl_wifi_bridge.ino\`.
+2. Выберите плату: **ESP32S3 Dev Module**.
+3. В меню **Tools → USB Mode** выберите **Hardware CDC and JTAG** (чтобы порт USB-OTG работал в режиме USB Host).
+4. Нажмите **Upload** (прошивка через порт \`UART\`).
+
+## Подключение в приложении Vento Diagnostic
+1. Подключите телефон к Wi-Fi сети **\`VENTO-KKL-WIFI\`** (пароль **\`ventokkl\`**).
+2. В приложении нажмите кнопку **\`WI-FI (ESP32)\`** (адрес \`192.168.4.1\`, порт \`3333\`).
+3. Включите зажигание и нажмите **\`ПОДКЛЮЧИТЬ ЭБУ\`**.
 `
   },
   {

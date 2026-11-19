@@ -66,7 +66,8 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:layout_marginBottom="8dp">
+        android:baselineAligned="false"
+        android:layout_marginBottom="6dp">
 
         <Button
             android:id="@+id/btnTabEngine"
@@ -77,11 +78,15 @@
             android:minHeight="0dp"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
+            android:breakStrategy="simple"
+            android:hyphenationFrequency="none"
             android:maxLines="2"
             android:text="ДВИГАТЕЛЬ (01)"
             android:textSize="12sp"
@@ -98,17 +103,161 @@
             android:minHeight="0dp"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
+            android:breakStrategy="simple"
+            android:hyphenationFrequency="none"
             android:maxLines="2"
             android:text="ИММОБИЛАЙЗЕР (25)"
             android:textSize="12sp"
             android:textStyle="bold"
             android:backgroundTint="#334155"
             android:textColor="#94A3B8" />
+    </LinearLayout>
+
+    <!-- Transport Mode Switcher: USB OTG vs Wi-Fi ESP32 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:baselineAligned="false"
+        android:layout_marginBottom="6dp">
+
+        <Button
+            android:id="@+id/btnConnUsb"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:minHeight="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
+            android:breakStrategy="simple"
+            android:hyphenationFrequency="none"
+            android:maxLines="2"
+            android:text="USB OTG КАБЕЛЬ"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:backgroundTint="#0F766E"
+            android:textColor="#FFFFFF" />
+
+        <Button
+            android:id="@+id/btnConnWifi"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:minHeight="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
+            android:breakStrategy="simple"
+            android:hyphenationFrequency="none"
+            android:maxLines="2"
+            android:text="WI-FI (ESP32)"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:backgroundTint="#334155"
+            android:textColor="#94A3B8" />
+    </LinearLayout>
+
+    <!-- Wi-Fi ESP32 Bridge Settings Card (visible when Wi-Fi mode selected) -->
+    <LinearLayout
+        android:id="@+id/layoutWifiConfig"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#0F172A"
+        android:padding="8dp"
+        android:layout_marginBottom="6dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="МОСТ ESP32 WI-FI → USB KKL (Сеть: VENTO-KKL-WIFI)"
+            android:textColor="#38BDF8"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="6dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:baselineAligned="false"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="IP:"
+                android:textColor="#94A3B8"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="6dp" />
+
+            <EditText
+                android:id="@+id/etWifiHost"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:background="#1E293B"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:text="192.168.4.1"
+                android:hint="192.168.4.1"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#64748B"
+                android:textSize="13sp"
+                android:typeface="monospace"
+                android:inputType="textUri"
+                android:maxLines="1"
+                android:layout_marginEnd="8dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Порт:"
+                android:textColor="#94A3B8"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="6dp" />
+
+            <EditText
+                android:id="@+id/etWifiPort"
+                android:layout_width="76dp"
+                android:layout_height="40dp"
+                android:background="#1E293B"
+                android:gravity="center"
+                android:text="3333"
+                android:hint="3333"
+                android:textColor="#38BDF8"
+                android:textColorHint="#64748B"
+                android:textSize="13sp"
+                android:typeface="monospace"
+                android:inputType="number"
+                android:maxLength="5"
+                android:maxLines="1" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- Status Card -->
@@ -221,6 +370,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
+            android:baselineAligned="false"
             android:layout_marginTop="8dp">
 
             <Button
@@ -237,6 +387,8 @@
                 android:paddingTop="4dp"
                 android:paddingBottom="4dp"
                 android:gravity="center"
+                android:textAlignment="center"
+                android:letterSpacing="0.02"
                 android:maxLines="2"
                 android:text="СЛЕДУЮЩИЙ ТЕСТ"
                 android:textSize="12sp"
@@ -258,6 +410,8 @@
                 android:paddingTop="4dp"
                 android:paddingBottom="4dp"
                 android:gravity="center"
+                android:textAlignment="center"
+                android:letterSpacing="0.02"
                 android:maxLines="2"
                 android:text="ЗАВЕРШИТЬ"
                 android:textSize="12sp"
@@ -369,7 +523,8 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
+            android:orientation="horizontal"
+            android:baselineAligned="false">
 
             <Button
                 android:id="@+id/btnAdaptRead"
@@ -385,6 +540,8 @@
                 android:paddingTop="4dp"
                 android:paddingBottom="4dp"
                 android:gravity="center"
+                android:textAlignment="center"
+                android:letterSpacing="0.02"
                 android:maxLines="2"
                 android:text="ЧИТАТЬ"
                 android:textSize="12sp"
@@ -406,6 +563,8 @@
                 android:paddingTop="4dp"
                 android:paddingBottom="4dp"
                 android:gravity="center"
+                android:textAlignment="center"
+                android:letterSpacing="0.02"
                 android:maxLines="2"
                 android:text="СОХРАНИТЬ"
                 android:textSize="12sp"
@@ -416,7 +575,7 @@
     </LinearLayout>
 
     <!-- Main Action Buttons (Uniform 54dp height and uniform 12sp font across all buttons) -->
-    <!-- Row 1: Full-width Connect button (auto-detects USB KKL) -->
+    <!-- Row 1: Full-width Connect button (USB OTG or Wi-Fi ESP32) -->
     <Button
         android:id="@+id/btnConnectEcu"
         android:layout_width="match_parent"
@@ -430,6 +589,8 @@
         android:paddingTop="4dp"
         android:paddingBottom="4dp"
         android:gravity="center"
+        android:textAlignment="center"
+        android:letterSpacing="0.02"
         android:maxLines="2"
         android:text="ПОДКЛЮЧИТЬ ЭБУ"
         android:textSize="12sp"
@@ -442,6 +603,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:baselineAligned="false"
         android:layout_marginBottom="6dp">
 
         <Button
@@ -458,6 +620,8 @@
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="ОШИБКИ (07)"
             android:textSize="12sp"
@@ -480,6 +644,8 @@
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="СТЕРЕТЬ (05)"
             android:textSize="12sp"
@@ -495,6 +661,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:baselineAligned="false"
         android:layout_marginBottom="6dp">
 
         <Button
@@ -511,6 +678,8 @@
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="ИЗМЕРЕНИЯ (08)"
             android:textSize="12sp"
@@ -533,6 +702,8 @@
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="ИСПОЛНИТЕЛИ (04)"
             android:textSize="12sp"
@@ -547,6 +718,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:baselineAligned="false"
         android:layout_marginBottom="6dp">
 
         <Button
@@ -563,6 +735,8 @@
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="БАЗОВЫЕ (УОЗ 6°)"
             android:textSize="12sp"
@@ -585,6 +759,8 @@
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="АДАПТАЦИЯ (10)"
             android:textSize="12sp"
@@ -599,6 +775,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:baselineAligned="false"
         android:layout_marginBottom="8dp">
 
         <Button
@@ -615,6 +792,8 @@
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="ПАСПОРТ ЭБУ"
             android:textSize="12sp"
@@ -637,6 +816,8 @@
             android:paddingTop="4dp"
             android:paddingBottom="4dp"
             android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
             android:maxLines="2"
             android:text="КОПИРОВАТЬ ОТЧЁТ"
             android:textSize="12sp"

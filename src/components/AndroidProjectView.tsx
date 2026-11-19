@@ -22,7 +22,8 @@ import {
   Rocket,
   Smartphone,
   Terminal,
-  Usb
+  Usb,
+  Wifi
 } from 'lucide-react';
 import {
   ANDROID_PROJECT_FILES,
@@ -35,9 +36,11 @@ export const AndroidProjectView: React.FC = () => {
   const [selectedFileIdx, setSelectedFileIdx] = useState<number>(0);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [copiedCommands, setCopiedCommands] = useState<boolean>(false);
+  const [copiedEsp, setCopiedEsp] = useState<boolean>(false);
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
 
   const currentFile = ANDROID_PROJECT_FILES[selectedFileIdx] || ANDROID_PROJECT_FILES[0];
+  const espFileIdx = ANDROID_PROJECT_FILES.findIndex((f) => f.filename === 'esp32_kkl_wifi_bridge.ino');
 
   const handleDownloadZip = async () => {
     setIsDownloading(true);
@@ -60,6 +63,21 @@ export const AndroidProjectView: React.FC = () => {
     navigator.clipboard.writeText(currentFile.content);
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2000);
+  };
+
+  const handleCopyEspFirmware = () => {
+    if (espFileIdx >= 0) {
+      navigator.clipboard.writeText(ANDROID_PROJECT_FILES[espFileIdx].content);
+      setCopiedEsp(true);
+      setTimeout(() => setCopiedEsp(false), 2000);
+    }
+  };
+
+  const handleOpenEspInInspector = () => {
+    if (espFileIdx >= 0) {
+      setSelectedFileIdx(espFileIdx);
+      setActiveSubTab('code');
+    }
   };
 
   const gitPushScript = `# 1. Распакуйте скачанный zip-архив и перейдите в папку
@@ -246,6 +264,63 @@ git push -u origin main`;
               </div>
               <div className="mt-3 pt-3 border-t border-slate-800/80 text-[11px] text-blue-300">
                 Готовое нативное приложение с USB OTG и 5-бод драйвером установлено на телефон!
+              </div>
+            </div>
+          </div>
+
+          {/* ESP32-S3 Wi-Fi Bridge Info Card */}
+          <div className="bg-slate-900 border border-teal-800/70 rounded-xl p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-2.5">
+                <div className="w-9 h-9 rounded-lg bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400 shrink-0">
+                  <Wifi className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-slate-100">
+                    Беспроводной мост Wi-Fi на ESP32-S3 + USB KKL кабель
+                  </h4>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Подключайте USB KKL кабель (FT232 / CH340 / CP2102) к порту USB-OTG платы ESP32-S3, а диагностику проводите со смартфона по Wi-Fi.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={handleCopyEspFirmware}
+                  className="px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-600 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                >
+                  {copiedEsp ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedEsp ? 'Скетч скопирован!' : 'Копировать .ino'}</span>
+                </button>
+                <button
+                  onClick={handleOpenEspInInspector}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                >
+                  <FileCode className="w-3.5 h-3.5" />
+                  <span>Открыть код</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
+              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                <strong className="text-teal-300 block mb-1">1. Схема подключения</strong>
+                <span className="text-slate-400">
+                  Телефон (Wi-Fi) ⇄ ESP32-S3 (USB Host OTG + 5В) ⇄ USB KKL кабель ⇄ OBD-II авто.
+                </span>
+              </div>
+              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                <strong className="text-teal-300 block mb-1">2. Прошивка Arduino IDE</strong>
+                <span className="text-slate-400">
+                  Плата <code>ESP32S3 Dev Module</code>, USB Mode: <code>Hardware CDC and JTAG</code>. Залейте <code>esp32_kkl_wifi_bridge.ino</code>.
+                </span>
+              </div>
+              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                <strong className="text-teal-300 block mb-1">3. Wi-Fi в телефоне</strong>
+                <span className="text-slate-400">
+                  Сеть <code>VENTO-KKL-WIFI</code> (пароль <code>ventokkl</code>), затем в приложении выберите <code>WI-FI (ESP32)</code> → <code>192.168.4.1:3333</code>.
+                </span>
               </div>
             </div>
           </div>
