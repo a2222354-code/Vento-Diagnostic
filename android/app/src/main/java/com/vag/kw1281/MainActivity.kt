@@ -8,6 +8,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ActivityInfo
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -179,6 +180,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         try {
             setContentView(R.layout.activity_main)
 
@@ -973,7 +975,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateScopeHeaderAndCards(views: MeasuringWindowViews) {
         val density = resources.displayMetrics.density
         views.layoutScopePanel.visibility = if (isScopePanelVisible) View.VISIBLE else View.GONE
-        views.btnToggleScope.text = if (isScopePanelVisible) "СКРЫТЬ ГРАФИК" else "ГРАФИКИ"
+        views.btnToggleScope.text = if (isScopePanelVisible) "СКРЫТЬ" else "ГРАФИКИ"
         views.btnToggleScope.backgroundTintList = ColorStateList.valueOf(
             Color.parseColor(if (isScopePanelVisible) "#0284C7" else "#334155")
         )

@@ -61,6 +61,14 @@ export default function App() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
+    // Attempt portrait lock on mobile PWA/browsers that support Screen Orientation API
+    try {
+      const orientation = (window.screen as unknown as { orientation?: { lock?: (o: string) => Promise<void> } }).orientation;
+      orientation?.lock?.('portrait')?.catch(() => {});
+    } catch {
+      // Ignore on unsupported browsers
+    }
+
     // Initial simulated auto-connect for smooth onboarding
     kw1281.connect();
 
