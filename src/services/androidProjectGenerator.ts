@@ -2746,20 +2746,43 @@ class OscilloscopeView @JvmOverloads constructor(
                 android:textSize="11sp" />
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/tvBaudBadge"
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="9600 бод"
-            android:textColor="#38BDF8"
-            android:background="#1E293B"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            android:paddingTop="4dp"
-            android:paddingBottom="4dp"
-            android:textSize="11sp"
-            android:textStyle="bold"
-            android:typeface="monospace" />
+            android:orientation="vertical"
+            android:gravity="end">
+
+            <TextView
+                android:id="@+id/tvBaudBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="9600 бод"
+                android:textColor="#38BDF8"
+                android:background="#1E293B"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingTop="3dp"
+                android:paddingBottom="3dp"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:typeface="monospace" />
+
+            <TextView
+                android:id="@+id/tvTransportBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:text="USB OTG"
+                android:textColor="#2DD4BF"
+                android:background="#0F172A"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingTop="2dp"
+                android:paddingBottom="2dp"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:typeface="monospace" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- ECU Module Switcher Tabs: Engine (0x01) vs Immobilizer (0x25) -->
@@ -2821,145 +2844,7 @@ class OscilloscopeView @JvmOverloads constructor(
             android:textColor="#94A3B8" />
     </LinearLayout>
 
-    <!-- Transport Mode Switcher: USB OTG vs Wi-Fi ESP32 -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:baselineAligned="false"
-        android:layout_marginBottom="6dp">
-
-        <Button
-            android:id="@+id/btnConnUsb"
-            android:layout_width="0dp"
-            android:layout_height="54dp"
-            android:layout_weight="1"
-            android:layout_marginEnd="4dp"
-            android:minHeight="0dp"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:paddingStart="4dp"
-            android:paddingEnd="4dp"
-            android:paddingTop="4dp"
-            android:paddingBottom="4dp"
-            android:gravity="center"
-            android:textAlignment="center"
-            android:letterSpacing="0.02"
-            android:breakStrategy="simple"
-            android:hyphenationFrequency="none"
-            android:maxLines="2"
-            android:text="USB OTG КАБЕЛЬ"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:backgroundTint="#0F766E"
-            android:textColor="#FFFFFF" />
-
-        <Button
-            android:id="@+id/btnConnWifi"
-            android:layout_width="0dp"
-            android:layout_height="54dp"
-            android:layout_weight="1"
-            android:layout_marginStart="4dp"
-            android:minHeight="0dp"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:paddingStart="4dp"
-            android:paddingEnd="4dp"
-            android:paddingTop="4dp"
-            android:paddingBottom="4dp"
-            android:gravity="center"
-            android:textAlignment="center"
-            android:letterSpacing="0.02"
-            android:breakStrategy="simple"
-            android:hyphenationFrequency="none"
-            android:maxLines="2"
-            android:text="WI-FI (ESP32)"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:backgroundTint="#334155"
-            android:textColor="#94A3B8" />
-    </LinearLayout>
-
-    <!-- Wi-Fi ESP32 Bridge Settings Card (visible when Wi-Fi mode selected) -->
-    <LinearLayout
-        android:id="@+id/layoutWifiConfig"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:background="#0F172A"
-        android:padding="8dp"
-        android:layout_marginBottom="6dp"
-        android:visibility="gone">
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="МОСТ ESP32 WI-FI → USB KKL (Сеть: VENTO-KKL-WIFI)"
-            android:textColor="#38BDF8"
-            android:textSize="11sp"
-            android:textStyle="bold"
-            android:layout_marginBottom="6dp" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:baselineAligned="false"
-            android:gravity="center_vertical">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="IP:"
-                android:textColor="#94A3B8"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:layout_marginEnd="6dp" />
-
-            <EditText
-                android:id="@+id/etWifiHost"
-                android:layout_width="0dp"
-                android:layout_height="40dp"
-                android:layout_weight="1"
-                android:background="#1E293B"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                android:text="192.168.4.1"
-                android:hint="192.168.4.1"
-                android:textColor="#FFFFFF"
-                android:textColorHint="#64748B"
-                android:textSize="13sp"
-                android:typeface="monospace"
-                android:inputType="textUri"
-                android:maxLines="1"
-                android:layout_marginEnd="8dp" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Порт:"
-                android:textColor="#94A3B8"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:layout_marginEnd="6dp" />
-
-            <EditText
-                android:id="@+id/etWifiPort"
-                android:layout_width="76dp"
-                android:layout_height="40dp"
-                android:background="#1E293B"
-                android:gravity="center"
-                android:text="3333"
-                android:hint="3333"
-                android:textColor="#38BDF8"
-                android:textColorHint="#64748B"
-                android:textSize="13sp"
-                android:typeface="monospace"
-                android:inputType="number"
-                android:maxLength="5"
-                android:maxLines="1" />
-        </LinearLayout>
-    </LinearLayout>
+    <!-- Transport Mode & Wi-Fi settings moved to dedicated Settings submenu (btnOpenSettings) -->
 
     <!-- Status Card -->
     <LinearLayout
@@ -3276,28 +3161,60 @@ class OscilloscopeView @JvmOverloads constructor(
     </LinearLayout>
 
     <!-- Main Action Buttons (Uniform 54dp height and uniform 12sp font across all buttons) -->
-    <!-- Row 1: Full-width Connect button (USB OTG or Wi-Fi ESP32) -->
-    <Button
-        android:id="@+id/btnConnectEcu"
+    <!-- Row 1: Connect ECU + Settings submenu -->
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="54dp"
-        android:layout_marginBottom="6dp"
-        android:minHeight="0dp"
-        android:insetTop="0dp"
-        android:insetBottom="0dp"
-        android:paddingStart="8dp"
-        android:paddingEnd="8dp"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
-        android:gravity="center"
-        android:textAlignment="center"
-        android:letterSpacing="0.02"
-        android:maxLines="2"
-        android:text="ПОДКЛЮЧИТЬ ЭБУ"
-        android:textSize="12sp"
-        android:textStyle="bold"
-        android:backgroundTint="#10B981"
-        android:textColor="#FFFFFF" />
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:baselineAligned="false"
+        android:layout_marginBottom="6dp">
+
+        <Button
+            android:id="@+id/btnConnectEcu"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_weight="1.45"
+            android:layout_marginEnd="4dp"
+            android:minHeight="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
+            android:maxLines="2"
+            android:text="ПОДКЛЮЧИТЬ ЭБУ"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:backgroundTint="#10B981"
+            android:textColor="#FFFFFF" />
+
+        <Button
+            android:id="@+id/btnOpenSettings"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:minHeight="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
+            android:maxLines="2"
+            android:text="НАСТРОЙКИ"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:backgroundTint="#334155"
+            android:textColor="#E2E8F0" />
+    </LinearLayout>
 
     <!-- Row 2: DTC Faults -->
     <LinearLayout
@@ -4403,6 +4320,7 @@ class OscilloscopeView @JvmOverloads constructor(
 
 import android.app.Dialog
 import android.app.PendingIntent
+import android.app.UiModeManager
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -4411,16 +4329,20 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Point
 import android.graphics.drawable.GradientDrawable
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
+import android.view.Surface
 import android.view.View
 import android.view.Window
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -4451,18 +4373,28 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTabImmo: Button
     private var selectedEcuAddress: Int = 0x01 // 0x01 = Двигатель, 0x25 = Иммобилайзер
 
-    // Выбор транспорта: USB OTG или Wi-Fi (ESP32)
-    private lateinit var btnConnUsb: Button
-    private lateinit var btnConnWifi: Button
-    private lateinit var layoutWifiConfig: LinearLayout
-    private lateinit var etWifiHost: EditText
-    private lateinit var etWifiPort: EditText
+    // Настройки подключения и экрана (сохраняются в SharedPreferences)
+    private lateinit var tvTransportBadge: TextView
+    private lateinit var btnOpenSettings: Button
     private var isWifiMode: Boolean = false
+    private var wifiHost: String = "192.168.4.1"
+    private var wifiPort: Int = 3333
+    private var orientationMode: String = ORIENT_AUTO
+    private var keepScreenOn: Boolean = true
 
-    private val PREFS_NAME = "vento_diag_prefs"
-    private val PREF_WIFI_MODE = "use_wifi_esp32"
-    private val PREF_WIFI_HOST = "wifi_esp32_host"
-    private val PREF_WIFI_PORT = "wifi_esp32_port"
+    companion object {
+        private const val PREFS_NAME = "vento_diag_prefs"
+        private const val PREF_WIFI_MODE = "use_wifi_esp32"
+        private const val PREF_WIFI_HOST = "wifi_esp32_host"
+        private const val PREF_WIFI_PORT = "wifi_esp32_port"
+        private const val PREF_ORIENTATION_MODE = "screen_orientation_mode"
+        private const val PREF_KEEP_SCREEN_ON = "keep_screen_on"
+
+        private const val ORIENT_AUTO = "AUTO"
+        private const val ORIENT_PORTRAIT = "PORTRAIT"
+        private const val ORIENT_LANDSCAPE = "LANDSCAPE"
+        private const val ORIENT_SENSOR = "SENSOR"
+    }
 
     // Отдельное окно измерений и осциллограф
     private var measuringDialog: Dialog? = null
@@ -4598,7 +4530,17 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        isWifiMode = prefs.getBoolean(PREF_WIFI_MODE, false)
+        wifiHost = prefs.getString(PREF_WIFI_HOST, "192.168.4.1") ?: "192.168.4.1"
+        wifiPort = prefs.getInt(PREF_WIFI_PORT, 3333)
+        orientationMode = prefs.getString(PREF_ORIENTATION_MODE, ORIENT_AUTO) ?: ORIENT_AUTO
+        keepScreenOn = prefs.getBoolean(PREF_KEEP_SCREEN_ON, true)
+
+        applyOrientationPreference()
+        applyKeepScreenOnFlag()
+
         try {
             setContentView(R.layout.activity_main)
 
@@ -4608,22 +4550,13 @@ class MainActivity : AppCompatActivity() {
             tvStatus = findViewById(R.id.tvStatus)
             tvDeviceInfo = findViewById(R.id.tvDeviceInfo)
             tvBaudBadge = findViewById(R.id.tvBaudBadge)
+            tvTransportBadge = findViewById(R.id.tvTransportBadge)
             tvResults = findViewById(R.id.tvResults)
             scrollViewResults = findViewById(R.id.scrollViewResults)
 
             btnTabEngine = findViewById(R.id.btnTabEngine)
             btnTabImmo = findViewById(R.id.btnTabImmo)
-
-            btnConnUsb = findViewById(R.id.btnConnUsb)
-            btnConnWifi = findViewById(R.id.btnConnWifi)
-            layoutWifiConfig = findViewById(R.id.layoutWifiConfig)
-            etWifiHost = findViewById(R.id.etWifiHost)
-            etWifiPort = findViewById(R.id.etWifiPort)
-
-            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            isWifiMode = prefs.getBoolean(PREF_WIFI_MODE, false)
-            etWifiHost.setText(prefs.getString(PREF_WIFI_HOST, "192.168.4.1") ?: "192.168.4.1")
-            etWifiPort.setText(prefs.getInt(PREF_WIFI_PORT, 3333).toString())
+            btnOpenSettings = findViewById(R.id.btnOpenSettings)
 
             layoutImmoStatus = findViewById(R.id.layoutImmoStatus)
             tvImmoKeyStatus = findViewById(R.id.tvImmoKeyStatus)
@@ -4654,11 +4587,11 @@ class MainActivity : AppCompatActivity() {
             btnEcuPassport = findViewById(R.id.btnEcuPassport)
             btnShareReport = findViewById(R.id.btnShareReport)
 
-            // Переключение табов ЭБУ и способа подключения
+            // Переключение табов ЭБУ и подменю настроек
             btnTabEngine.setOnClickListener { switchEcuTab(0x01) }
             btnTabImmo.setOnClickListener { switchEcuTab(0x25) }
-            btnConnUsb.setOnClickListener { switchTransportMode(false) }
-            btnConnWifi.setOnClickListener { switchTransportMode(true) }
+            btnOpenSettings.setOnClickListener { openSettingsDialog() }
+            tvTransportBadge.setOnClickListener { openSettingsDialog() }
 
             // Обработчики кнопок
             btnConnectEcu.setOnClickListener { onConnectButtonClicked() }
@@ -4758,6 +4691,194 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun detectNaturalLandscape(): Boolean {
+        val uiModeManager = getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
+        if (uiModeManager?.currentModeType == Configuration.UI_MODE_TYPE_CAR) {
+            return true
+        }
+        if (resources.configuration.smallestScreenWidthDp >= 580) {
+            return true
+        }
+        return try {
+            val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            @Suppress("DEPRECATION")
+            val display = wm.defaultDisplay
+            val size = Point()
+            @Suppress("DEPRECATION")
+            display.getRealSize(size)
+            val rotation = display.rotation
+            if (rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270) {
+                size.y > size.x
+            } else {
+                size.x > size.y
+            }
+        } catch (_: Throwable) {
+            resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        }
+    }
+
+    private fun applyOrientationPreference() {
+        val target = when (orientationMode) {
+            ORIENT_PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            ORIENT_LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            ORIENT_SENSOR -> ActivityInfo.SCREEN_ORIENTATION_SENSOR
+            else -> if (detectNaturalLandscape()) {
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+        }
+        if (requestedOrientation != target) {
+            requestedOrientation = target
+        }
+    }
+
+    private fun applyKeepScreenOnFlag() {
+        if (keepScreenOn) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    private fun openSettingsDialog() {
+        val dialog = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dialog.setContentView(R.layout.dialog_settings)
+        dialog.window?.setLayout(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT
+        )
+        @Suppress("DEPRECATION")
+        dialog.window?.setSoftInputMode(
+            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN
+        )
+        if (keepScreenOn) {
+            dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+
+        val btnSetUsb = dialog.findViewById<Button>(R.id.btnSetUsb)
+        val btnSetWifi = dialog.findViewById<Button>(R.id.btnSetWifi)
+        val tvSetTransportHint = dialog.findViewById<TextView>(R.id.tvSetTransportHint)
+        val layoutSetWifiFields = dialog.findViewById<LinearLayout>(R.id.layoutSetWifiFields)
+        val etSetWifiHost = dialog.findViewById<EditText>(R.id.etSetWifiHost)
+        val etSetWifiPort = dialog.findViewById<EditText>(R.id.etSetWifiPort)
+
+        val btnOrientAuto = dialog.findViewById<Button>(R.id.btnOrientAuto)
+        val btnOrientLandscape = dialog.findViewById<Button>(R.id.btnOrientLandscape)
+        val btnOrientPortrait = dialog.findViewById<Button>(R.id.btnOrientPortrait)
+        val btnOrientSensor = dialog.findViewById<Button>(R.id.btnOrientSensor)
+        val tvOrientHint = dialog.findViewById<TextView>(R.id.tvOrientHint)
+        val cbKeepScreenOn = dialog.findViewById<CheckBox>(R.id.cbKeepScreenOn)
+
+        val btnSettingsCancel = dialog.findViewById<Button>(R.id.btnSettingsCancel)
+        val btnSettingsSave = dialog.findViewById<Button>(R.id.btnSettingsSave)
+
+        var draftWifi = isWifiMode
+        var draftOrient = orientationMode
+
+        etSetWifiHost.setText(wifiHost)
+        etSetWifiPort.setText(wifiPort.toString())
+        cbKeepScreenOn.isChecked = keepScreenOn
+
+        fun refreshTransportUi() {
+            if (draftWifi) {
+                btnSetWifi.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0F766E"))
+                btnSetWifi.setTextColor(Color.WHITE)
+                btnSetUsb.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#334155"))
+                btnSetUsb.setTextColor(Color.parseColor("#94A3B8"))
+                layoutSetWifiFields.visibility = View.VISIBLE
+                tvSetTransportHint.text = "Беспроводной мост Wi-Fi ESP32-S3 + USB KKL (подключитесь к сети VENTO-KKL-WIFI)."
+            } else {
+                btnSetUsb.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0F766E"))
+                btnSetUsb.setTextColor(Color.WHITE)
+                btnSetWifi.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#334155"))
+                btnSetWifi.setTextColor(Color.parseColor("#94A3B8"))
+                layoutSetWifiFields.visibility = View.GONE
+                tvSetTransportHint.text = "Прямое подключение USB KKL кабеля (FT232/CH340) к телефону или автомагнитоле."
+            }
+        }
+
+        fun styleOrientBtn(btn: Button, selected: Boolean) {
+            btn.backgroundTintList = ColorStateList.valueOf(
+                Color.parseColor(if (selected) "#0284C7" else "#334155")
+            )
+            btn.setTextColor(if (selected) Color.WHITE else Color.parseColor("#94A3B8"))
+        }
+
+        fun refreshOrientUi() {
+            styleOrientBtn(btnOrientAuto, draftOrient == ORIENT_AUTO)
+            styleOrientBtn(btnOrientLandscape, draftOrient == ORIENT_LANDSCAPE)
+            styleOrientBtn(btnOrientPortrait, draftOrient == ORIENT_PORTRAIT)
+            styleOrientBtn(btnOrientSensor, draftOrient == ORIENT_SENSOR)
+
+            tvOrientHint.text = when (draftOrient) {
+                ORIENT_LANDSCAPE -> "Горизонтальный 2-колоночный интерфейс для 7\\" Android автомагнитол (1024×600 / 1280×720) и планшетов."
+                ORIENT_PORTRAIT -> "Фиксированный вертикальный режим для смартфонов (поворот экрана заблокирован)."
+                ORIENT_SENSOR -> "Свободный поворот экрана по датчику положения (телефон / автомагнитола)."
+                else -> "Авто: смартфон фиксируется вертикально, а 7\\" автомагнитола открывается горизонтально в две колонки."
+            }
+        }
+
+        btnSetUsb.setOnClickListener {
+            draftWifi = false
+            refreshTransportUi()
+        }
+        btnSetWifi.setOnClickListener {
+            draftWifi = true
+            refreshTransportUi()
+        }
+
+        btnOrientAuto.setOnClickListener {
+            draftOrient = ORIENT_AUTO
+            refreshOrientUi()
+        }
+        btnOrientLandscape.setOnClickListener {
+            draftOrient = ORIENT_LANDSCAPE
+            refreshOrientUi()
+        }
+        btnOrientPortrait.setOnClickListener {
+            draftOrient = ORIENT_PORTRAIT
+            refreshOrientUi()
+        }
+        btnOrientSensor.setOnClickListener {
+            draftOrient = ORIENT_SENSOR
+            refreshOrientUi()
+        }
+
+        btnSettingsCancel.setOnClickListener { dialog.dismiss() }
+        btnSettingsSave.setOnClickListener {
+            val newHost = etSetWifiHost.text.toString().trim().ifEmpty { "192.168.4.1" }
+            val newPort = etSetWifiPort.text.toString().trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: 3333
+            val newKeepScreenOn = cbKeepScreenOn.isChecked
+
+            wifiHost = newHost
+            wifiPort = newPort
+            orientationMode = draftOrient
+            keepScreenOn = newKeepScreenOn
+
+            getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(PREF_WIFI_MODE, draftWifi)
+                .putString(PREF_WIFI_HOST, newHost)
+                .putInt(PREF_WIFI_PORT, newPort)
+                .putString(PREF_ORIENTATION_MODE, draftOrient)
+                .putBoolean(PREF_KEEP_SCREEN_ON, newKeepScreenOn)
+                .apply()
+
+            applyKeepScreenOnFlag()
+            switchTransportMode(draftWifi, resetSession = true)
+            dialog.dismiss()
+            applyOrientationPreference()
+            Toast.makeText(this, "Настройки сохранены", Toast.LENGTH_SHORT).show()
+        }
+
+        refreshTransportUi()
+        refreshOrientUi()
+        dialog.show()
+    }
+
     private fun switchTransportMode(wifi: Boolean, resetSession: Boolean = true) {
         if (resetSession && isWifiMode != wifi) {
             disconnectSession()
@@ -4771,31 +4892,27 @@ class MainActivity : AppCompatActivity() {
             .apply()
 
         if (wifi) {
-            btnConnWifi.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0F766E"))
-            btnConnWifi.setTextColor(Color.WHITE)
-            btnConnUsb.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#334155"))
-            btnConnUsb.setTextColor(Color.parseColor("#94A3B8"))
-            layoutWifiConfig.visibility = View.VISIBLE
+            tvTransportBadge.text = "WI-FI ESP32"
+            tvTransportBadge.setTextColor(Color.parseColor("#38BDF8"))
 
             if (kwProtocol?.isSessionActive != true) {
-                val host = etWifiHost.text.toString().trim().ifEmpty { "192.168.4.1" }
-                val port = etWifiPort.text.toString().trim().ifEmpty { "3333" }
+                val host = wifiHost.trim().ifEmpty { "192.168.4.1" }
+                val port = wifiPort.takeIf { it in 1..65535 } ?: 3333
                 tvStatus.text = "Статус: Wi-Fi мост ESP32 ($host:$port)"
-                setResultText("Режим беспроводного подключения через ESP32-S3 + USB KKL:\\n\\n" +
+                setResultText("Режим беспроводного подключения через ESP32-S3 + USB KKL ($host:$port):\\n\\n" +
                         "1. Подключите USB KKL кабель (FT232 / CH340) к порту USB-OTG платы ESP32-S3.\\n" +
-                        "2. На телефоне подключитесь к Wi-Fi сети ESP32: VENTO-KKL-WIFI (пароль: ventokkl).\\n" +
-                        "3. Включите зажигание автомобиля и нажмите «ПОДКЛЮЧИТЬ ЭБУ».")
+                        "2. На устройстве подключитесь к Wi-Fi сети ESP32: VENTO-KKL-WIFI (пароль: ventokkl).\\n" +
+                        "3. Включите зажигание автомобиля и нажмите «ПОДКЛЮЧИТЬ ЭБУ».\\n\\n" +
+                        "Сменить способ подключения или IP/порт можно в меню «НАСТРОЙКИ».")
             }
         } else {
-            btnConnUsb.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0F766E"))
-            btnConnUsb.setTextColor(Color.WHITE)
-            btnConnWifi.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#334155"))
-            btnConnWifi.setTextColor(Color.parseColor("#94A3B8"))
-            layoutWifiConfig.visibility = View.GONE
+            tvTransportBadge.text = "USB OTG"
+            tvTransportBadge.setTextColor(Color.parseColor("#2DD4BF"))
 
             if (kwProtocol?.isSessionActive != true) {
                 findUsbAdapter(autoRequestPermission = false)
-                setResultText("Режим прямого подключения через USB-OTG KKL кабель.\\nПодключите кабель к телефону, включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ».")
+                setResultText("Режим прямого подключения через USB KKL кабель.\\nПодключите кабель к устройству (смартфону или USB-порту автомагнитолы), включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ».\\n\\n" +
+                        "Для работы по Wi-Fi (ESP32) откройте «НАСТРОЙКИ».")
             }
         }
     }
@@ -4912,16 +5029,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun connectToSelectedEcuViaWifi() {
-        val host = etWifiHost.text.toString().trim().ifEmpty { "192.168.4.1" }
-        val port = etWifiPort.text.toString().trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: 3333
-
-        etWifiHost.setText(host)
-        etWifiPort.setText(port.toString())
-        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putString(PREF_WIFI_HOST, host)
-            .putInt(PREF_WIFI_PORT, port)
-            .apply()
+        val host = wifiHost.trim().ifEmpty { "192.168.4.1" }
+        val port = wifiPort.takeIf { it in 1..65535 } ?: 3333
 
         lifecycleScope.launch {
             try {
@@ -5015,7 +5124,7 @@ class MainActivity : AppCompatActivity() {
         val manager = usbManager ?: return
         val dev = findUsbAdapter(autoRequestPermission = false)
         if (dev == null) {
-            setResultText("USB KKL адаптер не обнаружен.\\n\\n• Подключите кабель через USB-OTG переходник к телефону.\\n• Либо переключитесь на вкладку «WI-FI (ESP32)» выше.")
+            setResultText("USB KKL адаптер не обнаружен.\\n\\n• Подключите кабель через USB-OTG переходник (или к USB автомагнитолы).\\n• Либо откройте «НАСТРОЙКИ» и выберите «WI-FI (ESP32)».")
             return
         }
 
@@ -5216,6 +5325,9 @@ class MainActivity : AppCompatActivity() {
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT
         )
+        if (keepScreenOn) {
+            dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
         measuringDialog = dialog
 
         val views = MeasuringWindowViews(dialog)
@@ -5934,8 +6046,8 @@ class MainActivity : AppCompatActivity() {
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="portrait"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:configChanges="keyboardHidden"
+            android:windowSoftInputMode="adjustResize|stateHidden"
             android:theme="@style/Theme.Material3.Dark">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -7121,6 +7233,2060 @@ void loop() {
 3. Включите зажигание (заводить мотор не обязательно).
 4. Подтвердите доступ к USB в появившемся окне Android.
 5. Нажмите «Подключить к ЭБУ».
+`
+  },
+  {
+    path: 'app/src/main/res/layout/dialog_settings.xml',
+    filename: 'dialog_settings.xml',
+    language: 'xml',
+    description: 'Подменю настроек подключения (USB/Wi-Fi ESP32) и режима экрана (телефон / 7" автомагнитола)',
+    content: `<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#090D16"
+    android:padding="12dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="10dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="НАСТРОЙКИ ПОДКЛЮЧЕНИЯ И ЭКРАНА"
+            android:textColor="#38BDF8"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:typeface="monospace" />
+    </LinearLayout>
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginBottom="10dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- Section 1: Transport Mode -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#0F172A"
+                android:padding="12dp"
+                android:layout_marginBottom="10dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="1. СПОСОБ ПОДКЛЮЧЕНИЯ К АВТО"
+                    android:textColor="#E2E8F0"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:layout_marginBottom="8dp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginBottom="8dp">
+
+                    <Button
+                        android:id="@+id/btnSetUsb"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="USB OTG КАБЕЛЬ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#0F766E"
+                        android:textColor="#FFFFFF" />
+
+                    <Button
+                        android:id="@+id/btnSetWifi"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="WI-FI (ESP32)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#334155"
+                        android:textColor="#94A3B8" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tvSetTransportHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Прямое подключение USB KKL кабеля (FT232/CH340) к телефону или автомагнитоле."
+                    android:textColor="#94A3B8"
+                    android:textSize="11sp"
+                    android:layout_marginBottom="6dp" />
+
+                <LinearLayout
+                    android:id="@+id/layoutSetWifiFields"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:background="#1E293B"
+                    android:padding="10dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Сеть ESP32-S3: VENTO-KKL-WIFI (пароль: ventokkl)"
+                        android:textColor="#38BDF8"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:layout_marginBottom="8dp" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:baselineAligned="false"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="IP:"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12sp"
+                            android:textStyle="bold"
+                            android:layout_marginEnd="6dp" />
+
+                        <EditText
+                            android:id="@+id/etSetWifiHost"
+                            android:layout_width="0dp"
+                            android:layout_height="44dp"
+                            android:layout_weight="1"
+                            android:background="#0F172A"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:text="192.168.4.1"
+                            android:hint="192.168.4.1"
+                            android:textColor="#FFFFFF"
+                            android:textColorHint="#64748B"
+                            android:textSize="13sp"
+                            android:typeface="monospace"
+                            android:inputType="textUri"
+                            android:maxLines="1"
+                            android:layout_marginEnd="8dp" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Порт:"
+                            android:textColor="#CBD5E1"
+                            android:textSize="12sp"
+                            android:textStyle="bold"
+                            android:layout_marginEnd="6dp" />
+
+                        <EditText
+                            android:id="@+id/etSetWifiPort"
+                            android:layout_width="82dp"
+                            android:layout_height="44dp"
+                            android:background="#0F172A"
+                            android:gravity="center"
+                            android:text="3333"
+                            android:hint="3333"
+                            android:textColor="#38BDF8"
+                            android:textColorHint="#64748B"
+                            android:textSize="13sp"
+                            android:typeface="monospace"
+                            android:inputType="number"
+                            android:maxLength="5"
+                            android:maxLines="1" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Section 2: Screen Orientation & Car Head Unit Mode -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#0F172A"
+                android:padding="12dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="2. РЕЖИМ ЭКРАНА (ТЕЛЕФОН / АВТОМАГНИТОЛА 7&quot;)"
+                    android:textColor="#E2E8F0"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:layout_marginBottom="8dp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginBottom="6dp">
+
+                    <Button
+                        android:id="@+id/btnOrientAuto"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="АВТО (ПО ЭКРАНУ)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#0284C7"
+                        android:textColor="#FFFFFF" />
+
+                    <Button
+                        android:id="@+id/btnOrientLandscape"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="МАГНИТОЛА 7&quot; (ГОР.)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#334155"
+                        android:textColor="#94A3B8" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginBottom="8dp">
+
+                    <Button
+                        android:id="@+id/btnOrientPortrait"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ТЕЛЕФОН (ВЕРТ.)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#334155"
+                        android:textColor="#94A3B8" />
+
+                    <Button
+                        android:id="@+id/btnOrientSensor"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ПОВОРОТ ДАТЧИКОМ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#334155"
+                        android:textColor="#94A3B8" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tvOrientHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Авто: смартфон фиксируется вертикально, 7&quot; автомагнитола — горизонтально с двухколоночным экраном."
+                    android:textColor="#94A3B8"
+                    android:textSize="11sp"
+                    android:layout_marginBottom="10dp" />
+
+                <CheckBox
+                    android:id="@+id/cbKeepScreenOn"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Не отключать экран во время диагностики"
+                    android:textColor="#F1F5F9"
+                    android:textSize="12sp"
+                    android:checked="true" />
+            </LinearLayout>
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- Footer Buttons -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:baselineAligned="false">
+
+        <Button
+            android:id="@+id/btnSettingsCancel"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:minHeight="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
+            android:maxLines="2"
+            android:text="ОТМЕНА"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:backgroundTint="#334155"
+            android:textColor="#E2E8F0" />
+
+        <Button
+            android:id="@+id/btnSettingsSave"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:minHeight="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:gravity="center"
+            android:textAlignment="center"
+            android:letterSpacing="0.02"
+            android:maxLines="2"
+            android:text="СОХРАНИТЬ"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:backgroundTint="#10B981"
+            android:textColor="#FFFFFF" />
+    </LinearLayout>
+</LinearLayout>
+`
+  },
+  {
+    path: 'app/src/main/res/layout-land/activity_main.xml',
+    filename: 'layout-land/activity_main.xml',
+    language: 'xml',
+    description: 'Двухколоночная альбомная разметка главного экрана для 7" Android автомагнитол',
+    content: `<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#090D16"
+    android:padding="10dp">
+
+    <!-- Compact Top Header for 7" Head Unit / Landscape -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="8dp">
+
+        <ImageView
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:src="@drawable/ic_launcher"
+            android:layout_marginEnd="10dp"
+            android:contentDescription="VW Vento" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="VENTO DIAGNOSTIC"
+                android:textColor="#38BDF8"
+                android:textSize="17sp"
+                android:textStyle="bold"
+                android:typeface="monospace" />
+
+            <TextView
+                android:id="@+id/tvSubtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="VW Vento 1995 1.8 ADZ • KWP1281"
+                android:textColor="#94A3B8"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvTransportBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:text="USB OTG"
+            android:textColor="#2DD4BF"
+            android:background="#0F172A"
+            android:paddingStart="9dp"
+            android:paddingEnd="9dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:typeface="monospace" />
+
+        <TextView
+            android:id="@+id/tvBaudBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="9600 бод"
+            android:textColor="#38BDF8"
+            android:background="#1E293B"
+            android:paddingStart="9dp"
+            android:paddingEnd="9dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:typeface="monospace" />
+    </LinearLayout>
+
+    <!-- 2-Column Body: Left Control Pad + Right Status & Diagnostic Results -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal"
+        android:baselineAligned="false">
+
+        <!-- Left Column: Scrollable ECU Tabs & Action Buttons -->
+        <ScrollView
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.02"
+            android:layout_marginEnd="8dp"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <!-- ECU Module Switcher Tabs -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginBottom="6dp">
+
+                    <Button
+                        android:id="@+id/btnTabEngine"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:breakStrategy="simple"
+                        android:hyphenationFrequency="none"
+                        android:maxLines="2"
+                        android:text="ДВИГАТЕЛЬ (01)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#0284C7"
+                        android:textColor="#FFFFFF" />
+
+                    <Button
+                        android:id="@+id/btnTabImmo"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:breakStrategy="simple"
+                        android:hyphenationFrequency="none"
+                        android:maxLines="2"
+                        android:text="ИММОБИЛАЙЗЕР (25)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#334155"
+                        android:textColor="#94A3B8" />
+                </LinearLayout>
+
+                <!-- Row 1: Connect ECU + Settings -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginBottom="6dp">
+
+                    <Button
+                        android:id="@+id/btnConnectEcu"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1.45"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ПОДКЛЮЧИТЬ ЭБУ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#10B981"
+                        android:textColor="#FFFFFF" />
+
+                    <Button
+                        android:id="@+id/btnOpenSettings"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="НАСТРОЙКИ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#334155"
+                        android:textColor="#E2E8F0" />
+                </LinearLayout>
+
+                <!-- Row 2: DTC Faults -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginBottom="6dp">
+
+                    <Button
+                        android:id="@+id/btnReadFaults"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ОШИБКИ (07)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#F59E0B"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false" />
+
+                    <Button
+                        android:id="@+id/btnClearFaults"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="СТЕРЕТЬ (05)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#EF4444"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false" />
+                </LinearLayout>
+
+                <!-- Row 3: Live Data & Actuator Test -->
+                <LinearLayout
+                    android:id="@+id/rowEngineDiagnostics"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginBottom="6dp">
+
+                    <Button
+                        android:id="@+id/btnMeasuring"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ИЗМЕРЕНИЯ (08)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#8B5CF6"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false" />
+
+                    <Button
+                        android:id="@+id/btnActuatorStart"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ИСПОЛНИТЕЛИ (04)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#7C3AED"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false" />
+                </LinearLayout>
+
+                <!-- Row 4: Basic Settings & Adaptation -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginBottom="6dp">
+
+                    <Button
+                        android:id="@+id/btnBasicSettings"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="БАЗОВЫЕ (УОЗ 6°)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#0D9488"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false" />
+
+                    <Button
+                        android:id="@+id/btnAdaptationOpen"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="АДАПТАЦИЯ (10)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#2563EB"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false" />
+                </LinearLayout>
+
+                <!-- Row 5: ECU Passport & Share Report -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false">
+
+                    <Button
+                        android:id="@+id/btnEcuPassport"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ПАСПОРТ ЭБУ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#475569"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false" />
+
+                    <Button
+                        android:id="@+id/btnShareReport"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="КОПИРОВАТЬ ОТЧЁТ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#1E293B"
+                        android:textColor="#38BDF8" />
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+
+        <!-- Right Column: Status, Contextual Panels & Diagnostic Results -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.15"
+            android:orientation="vertical">
+
+            <!-- Status Card -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#1E293B"
+                android:padding="9dp"
+                android:layout_marginBottom="6dp">
+
+                <TextView
+                    android:id="@+id/tvStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Статус: Ожидание подключения к ЭБУ"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvDeviceInfo"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Блок: Bosch Mono-Motronic 1.2.3 (3A0 907 311)"
+                    android:textColor="#38BDF8"
+                    android:textSize="11sp"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+            <!-- Immobilizer Status Card -->
+            <LinearLayout
+                android:id="@+id/layoutImmoStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#0F172A"
+                android:padding="9dp"
+                android:layout_marginBottom="6dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="СОСТОЯНИЕ ИММОБИЛАЙЗЕРА (1H0 953 257):"
+                    android:textColor="#38BDF8"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvImmoKeyStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• Транспондер ключа: Ожидание опроса..."
+                    android:textColor="#CBD5E1"
+                    android:textSize="11sp"
+                    android:layout_marginTop="2dp" />
+
+                <TextView
+                    android:id="@+id/tvImmoStartStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• Разрешение пуска двигателя: Не проверено"
+                    android:textColor="#CBD5E1"
+                    android:textSize="11sp"
+                    android:layout_marginTop="2dp" />
+
+                <TextView
+                    android:id="@+id/tvImmoKeyCount"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• Ключей обучено в памяти: ---"
+                    android:textColor="#CBD5E1"
+                    android:textSize="11sp"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+            <!-- Actuator Test Controls Card -->
+            <LinearLayout
+                android:id="@+id/layoutActuatorTest"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#1E1B4B"
+                android:padding="9dp"
+                android:layout_marginBottom="6dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/tvActuatorTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="ТЕСТ ИСПОЛНИТЕЛЬНЫХ МЕХАНИЗМОВ (0x04)"
+                    android:textColor="#A78BFA"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvActuatorDesc"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Запуск теста..."
+                    android:textColor="#FFFFFF"
+                    android:textSize="12sp"
+                    android:layout_marginTop="3dp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginTop="6dp">
+
+                    <Button
+                        android:id="@+id/btnActuatorNext"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="СЛЕДУЮЩИЙ ТЕСТ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#7C3AED"
+                        android:textColor="#FFFFFF" />
+
+                    <Button
+                        android:id="@+id/btnActuatorStop"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ЗАВЕРШИТЬ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#EF4444"
+                        android:textColor="#FFFFFF" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Adaptation Controls Card -->
+            <LinearLayout
+                android:id="@+id/layoutAdaptation"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#172554"
+                android:padding="9dp"
+                android:layout_marginBottom="6dp"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="АДАПТАЦИЯ БЛОКА (KWP1281)"
+                        android:textColor="#60A5FA"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+
+                    <Button
+                        android:id="@+id/btnAdaptClose"
+                        android:layout_width="wrap_content"
+                        android:layout_height="34dp"
+                        android:minHeight="0dp"
+                        android:minWidth="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:maxLines="1"
+                        android:text="Закрыть"
+                        android:textSize="11sp"
+                        android:backgroundTint="#1E293B"
+                        android:textColor="#94A3B8" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tvAdaptHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Канал 00: сброс выученных адаптаций / привязка ЭБУ"
+                    android:textColor="#CBD5E1"
+                    android:textSize="11sp"
+                    android:layout_marginTop="2dp"
+                    android:layout_marginBottom="6dp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginBottom="6dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="40dp"
+                        android:gravity="center"
+                        android:background="#0F172A"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:text="Канал: 00"
+                        android:textColor="#38BDF8"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:layout_marginEnd="8dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Значение:"
+                        android:textColor="#FFFFFF"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:layout_marginEnd="6dp" />
+
+                    <EditText
+                        android:id="@+id/etAdaptValue"
+                        android:layout_width="0dp"
+                        android:layout_height="40dp"
+                        android:layout_weight="1"
+                        android:background="#0F172A"
+                        android:text="0"
+                        android:textColor="#10B981"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:gravity="center"
+                        android:inputType="number"
+                        android:maxLength="5" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false">
+
+                    <Button
+                        android:id="@+id/btnAdaptRead"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ЧИТАТЬ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#0284C7"
+                        android:textColor="#FFFFFF" />
+
+                    <Button
+                        android:id="@+id/btnAdaptSave"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="СОХРАНИТЬ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#10B981"
+                        android:textColor="#FFFFFF" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Diagnostic Results Display -->
+            <ScrollView
+                android:id="@+id/scrollViewResults"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:background="#020617"
+                android:padding="10dp">
+
+                <TextView
+                    android:id="@+id/tvResults"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#F1F5F9"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="3dp"
+                    android:text="Подключите USB KKL адаптер или выберите Wi-Fi (ESP32) в «НАСТРОЙКИ», включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ»." />
+            </ScrollView>
+        </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>
+`
+  },
+  {
+    path: 'app/src/main/res/layout-land/dialog_measuring.xml',
+    filename: 'layout-land/dialog_measuring.xml',
+    language: 'xml',
+    description: 'Альбомная разметка окна измерений и осциллограммы для 7" Android автомагнитол',
+    content: `<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#090D16">
+
+    <!-- Top Window Bar -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#0F172A"
+        android:paddingStart="12dp"
+        android:paddingEnd="10dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginEnd="8dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ИЗМЕРЕНИЯ ЭБУ (08)"
+                android:textColor="#38BDF8"
+                android:textSize="14sp"
+                android:maxLines="1"
+                android:textStyle="bold"
+                android:typeface="monospace"
+                android:layout_marginEnd="12dp" />
+
+            <TextView
+                android:id="@+id/tvMeasStatus"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:text="Подготовка опроса датчиков..."
+                android:textColor="#94A3B8"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btnToggleScope"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginEnd="6dp"
+            android:minHeight="0dp"
+            android:minWidth="86dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:maxLines="1"
+            android:text="СКРЫТЬ"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:backgroundTint="#0284C7"
+            android:textColor="#FFFFFF" />
+
+        <Button
+            android:id="@+id/btnCloseMeas"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:minHeight="0dp"
+            android:minWidth="86dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:maxLines="1"
+            android:text="ЗАКРЫТЬ"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:backgroundTint="#DC2626"
+            android:textColor="#FFFFFF" />
+    </LinearLayout>
+
+    <!-- 2-Column Body for 7" Head Unit: Left Full-Height Oscilloscope + Right Sensor Grid -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal"
+        android:baselineAligned="false">
+
+        <!-- Left Pane: Full-Height Oscilloscope Panel -->
+        <LinearLayout
+            android:id="@+id/layoutOscilloscopePanel"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.15"
+            android:orientation="vertical"
+            android:background="#0B1120"
+            android:padding="8dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="4dp">
+
+                <TextView
+                    android:id="@+id/tvScopeCount"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:maxLines="1"
+                    android:text="ОСЦИЛЛОГРАММА (2 кан.)"
+                    android:textColor="#E2E8F0"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btnScopeWindow"
+                    android:layout_width="wrap_content"
+                    android:layout_height="34dp"
+                    android:minHeight="0dp"
+                    android:minWidth="52dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:paddingTop="2dp"
+                    android:paddingBottom="2dp"
+                    android:maxLines="1"
+                    android:layout_marginEnd="4dp"
+                    android:text="30с"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#1E293B"
+                    android:textColor="#38BDF8" />
+
+                <Button
+                    android:id="@+id/btnScopePause"
+                    android:layout_width="wrap_content"
+                    android:layout_height="34dp"
+                    android:minHeight="0dp"
+                    android:minWidth="56dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:paddingTop="2dp"
+                    android:paddingBottom="2dp"
+                    android:maxLines="1"
+                    android:layout_marginEnd="4dp"
+                    android:text="ПАУЗА"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#334155"
+                    android:textColor="#FFFFFF" />
+
+                <Button
+                    android:id="@+id/btnScopeClear"
+                    android:layout_width="wrap_content"
+                    android:layout_height="34dp"
+                    android:minHeight="0dp"
+                    android:minWidth="56dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:paddingTop="2dp"
+                    android:paddingBottom="2dp"
+                    android:maxLines="1"
+                    android:text="СБРОС"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#334155"
+                    android:textColor="#CBD5E1" />
+            </LinearLayout>
+
+            <com.vag.kw1281.OscilloscopeView
+                android:id="@+id/oscilloscopeView"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+        </LinearLayout>
+
+        <!-- Right Pane: Sensor Hint + Scrollable 2-Column Sensor Grid + Raw Groups -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvMeasHint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#172554"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:text="Нажмите на датчик, чтобы добавить/убрать с графика"
+                android:textColor="#93C5FD"
+                android:textSize="11sp"
+                android:gravity="center" />
+
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:padding="6dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <!-- Row 1: RPM + Coolant Temp -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:baselineAligned="false"
+                        android:layout_marginBottom="6dp">
+
+                        <LinearLayout
+                            android:id="@+id/cardRpm"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="ОБОРОТЫ (G40)"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeRpm"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="НА ГРАФИКЕ"
+                                    android:textColor="#38BDF8"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasRpm"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#38BDF8"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="об/мин"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/cardTemp"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginStart="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="ДТОЖ (G62)"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeTemp"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasTemp"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#F59E0B"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="°C охлажд. жидк."
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Row 2: Lambda + Throttle Angle -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:baselineAligned="false"
+                        android:layout_marginBottom="6dp">
+
+                        <LinearLayout
+                            android:id="@+id/cardLambda"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="ЛЯМБДА (G39)"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeLambda"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="НА ГРАФИКЕ"
+                                    android:textColor="#10B981"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasLambda"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#10B981"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:id="@+id/tvMeasLambdaUnit"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Вольт"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/cardThrottle"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginStart="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="ДПДЗ (G69)"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeThrottle"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasThrottle"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#EC4899"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="угол дросселя °"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Row 3: Battery + Injection Time -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:baselineAligned="false"
+                        android:layout_marginBottom="6dp">
+
+                        <LinearLayout
+                            android:id="@+id/cardBattery"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="НАПРЯЖЕНИЕ АКБ"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeBattery"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasBattery"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#A78BFA"
+                                android:textSize="19sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Вольт (бортовая сеть)"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/cardInj"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginStart="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="ВПРЫСК (N30)"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeInj"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasInj"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#2DD4BF"
+                                android:textSize="19sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="мс длительность"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Row 4: Air Temp G42 + Ignition Timing -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:baselineAligned="false"
+                        android:layout_marginBottom="6dp">
+
+                        <LinearLayout
+                            android:id="@+id/cardAirTemp"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="ДТВВ (G42)"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeAirTemp"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasAirTemp"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#FB923C"
+                                android:textSize="19sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="°C воздух на впуске"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/cardTiming"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginStart="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="УОЗ ЗАЖИГАНИЯ"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeTiming"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasTiming"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#FACC15"
+                                android:textSize="17sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="угол опережения °"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Row 5: Engine Load + F60 Idle Switch -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:baselineAligned="false"
+                        android:layout_marginBottom="6dp">
+
+                        <LinearLayout
+                            android:id="@+id/cardLoad"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="НАГРУЗКА"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeLoad"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasLoad"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#60A5FA"
+                                android:textSize="19sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="% расчётная"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/cardIdleSwitch"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginStart="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="КОНЦЕВИК ДЗ (F60)"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeIdleSwitch"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasIdleSwitch"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#34D399"
+                                android:textSize="15sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:id="@+id/tvMeasMode"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Режим: ---"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:layout_marginTop="2dp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Raw Groups / Debug Details -->
+                    <TextView
+                        android:id="@+id/tvMeasRawGroups"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="#020617"
+                        android:padding="8dp"
+                        android:text="Ожидание первых данных от ЭБУ..."
+                        android:textColor="#CBD5E1"
+                        android:textSize="10sp"
+                        android:typeface="monospace"
+                        android:lineSpacingExtra="2dp" />
+                </LinearLayout>
+            </ScrollView>
+        </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>
 `
   }
 ];

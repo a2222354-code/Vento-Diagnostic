@@ -75,7 +75,17 @@ export class Kw1281Engine {
 
   public ecuInfo: EcuIdentification = { ...DEFAULT_ECU_VENTO };
 
+  private static readonly STORAGE_KEY_MODE = 'vento_diag_mode';
+
   constructor() {
+    try {
+      const savedMode = typeof window !== 'undefined' ? window.localStorage.getItem(Kw1281Engine.STORAGE_KEY_MODE) : null;
+      if (savedMode === 'SIMULATOR' || savedMode === 'USB_KKL') {
+        this.mode = savedMode;
+      }
+    } catch {
+      // Ignore storage access errors
+    }
     this.startSimulationLoop();
   }
 
@@ -84,6 +94,13 @@ export class Kw1281Engine {
   }
 
   public setMode(newMode: OperatingMode) {
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(Kw1281Engine.STORAGE_KEY_MODE, newMode);
+      }
+    } catch {
+      // Ignore storage access errors
+    }
     if (this.mode === newMode) return;
     this.disconnect();
     this.mode = newMode;

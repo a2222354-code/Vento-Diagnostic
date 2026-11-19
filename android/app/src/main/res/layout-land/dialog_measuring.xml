@@ -1,0 +1,851 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#090D16">
+
+    <!-- Top Window Bar -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#0F172A"
+        android:paddingStart="12dp"
+        android:paddingEnd="10dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginEnd="8dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ИЗМЕРЕНИЯ ЭБУ (08)"
+                android:textColor="#38BDF8"
+                android:textSize="14sp"
+                android:maxLines="1"
+                android:textStyle="bold"
+                android:typeface="monospace"
+                android:layout_marginEnd="12dp" />
+
+            <TextView
+                android:id="@+id/tvMeasStatus"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:text="Подготовка опроса датчиков..."
+                android:textColor="#94A3B8"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btnToggleScope"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginEnd="6dp"
+            android:minHeight="0dp"
+            android:minWidth="86dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:maxLines="1"
+            android:text="СКРЫТЬ"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:backgroundTint="#0284C7"
+            android:textColor="#FFFFFF" />
+
+        <Button
+            android:id="@+id/btnCloseMeas"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:minHeight="0dp"
+            android:minWidth="86dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:maxLines="1"
+            android:text="ЗАКРЫТЬ"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:backgroundTint="#DC2626"
+            android:textColor="#FFFFFF" />
+    </LinearLayout>
+
+    <!-- 2-Column Body for 7" Head Unit: Left Full-Height Oscilloscope + Right Sensor Grid -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal"
+        android:baselineAligned="false">
+
+        <!-- Left Pane: Full-Height Oscilloscope Panel -->
+        <LinearLayout
+            android:id="@+id/layoutOscilloscopePanel"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.15"
+            android:orientation="vertical"
+            android:background="#0B1120"
+            android:padding="8dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="4dp">
+
+                <TextView
+                    android:id="@+id/tvScopeCount"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:maxLines="1"
+                    android:text="ОСЦИЛЛОГРАММА (2 кан.)"
+                    android:textColor="#E2E8F0"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btnScopeWindow"
+                    android:layout_width="wrap_content"
+                    android:layout_height="34dp"
+                    android:minHeight="0dp"
+                    android:minWidth="52dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:paddingTop="2dp"
+                    android:paddingBottom="2dp"
+                    android:maxLines="1"
+                    android:layout_marginEnd="4dp"
+                    android:text="30с"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#1E293B"
+                    android:textColor="#38BDF8" />
+
+                <Button
+                    android:id="@+id/btnScopePause"
+                    android:layout_width="wrap_content"
+                    android:layout_height="34dp"
+                    android:minHeight="0dp"
+                    android:minWidth="56dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:paddingTop="2dp"
+                    android:paddingBottom="2dp"
+                    android:maxLines="1"
+                    android:layout_marginEnd="4dp"
+                    android:text="ПАУЗА"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#334155"
+                    android:textColor="#FFFFFF" />
+
+                <Button
+                    android:id="@+id/btnScopeClear"
+                    android:layout_width="wrap_content"
+                    android:layout_height="34dp"
+                    android:minHeight="0dp"
+                    android:minWidth="56dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:paddingTop="2dp"
+                    android:paddingBottom="2dp"
+                    android:maxLines="1"
+                    android:text="СБРОС"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#334155"
+                    android:textColor="#CBD5E1" />
+            </LinearLayout>
+
+            <com.vag.kw1281.OscilloscopeView
+                android:id="@+id/oscilloscopeView"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+        </LinearLayout>
+
+        <!-- Right Pane: Sensor Hint + Scrollable 2-Column Sensor Grid + Raw Groups -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvMeasHint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#172554"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:text="Нажмите на датчик, чтобы добавить/убрать с графика"
+                android:textColor="#93C5FD"
+                android:textSize="11sp"
+                android:gravity="center" />
+
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:padding="6dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <!-- Row 1: RPM + Coolant Temp -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:baselineAligned="false"
+                        android:layout_marginBottom="6dp">
+
+                        <LinearLayout
+                            android:id="@+id/cardRpm"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="ОБОРОТЫ (G40)"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeRpm"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="НА ГРАФИКЕ"
+                                    android:textColor="#38BDF8"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasRpm"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#38BDF8"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="об/мин"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/cardTemp"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginStart="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="ДТОЖ (G62)"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeTemp"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasTemp"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#F59E0B"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="°C охлажд. жидк."
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Row 2: Lambda + Throttle Angle -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:baselineAligned="false"
+                        android:layout_marginBottom="6dp">
+
+                        <LinearLayout
+                            android:id="@+id/cardLambda"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="ЛЯМБДА (G39)"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeLambda"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="НА ГРАФИКЕ"
+                                    android:textColor="#10B981"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasLambda"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#10B981"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:id="@+id/tvMeasLambdaUnit"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Вольт"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/cardThrottle"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginStart="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="ДПДЗ (G69)"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeThrottle"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasThrottle"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#EC4899"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="угол дросселя °"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Row 3: Battery + Injection Time -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:baselineAligned="false"
+                        android:layout_marginBottom="6dp">
+
+                        <LinearLayout
+                            android:id="@+id/cardBattery"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="НАПРЯЖЕНИЕ АКБ"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeBattery"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasBattery"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#A78BFA"
+                                android:textSize="19sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Вольт (бортовая сеть)"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/cardInj"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginStart="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="ВПРЫСК (N30)"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeInj"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasInj"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#2DD4BF"
+                                android:textSize="19sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="мс длительность"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Row 4: Air Temp G42 + Ignition Timing -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:baselineAligned="false"
+                        android:layout_marginBottom="6dp">
+
+                        <LinearLayout
+                            android:id="@+id/cardAirTemp"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="ДТВВ (G42)"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeAirTemp"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasAirTemp"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#FB923C"
+                                android:textSize="19sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="°C воздух на впуске"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/cardTiming"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginStart="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="УОЗ ЗАЖИГАНИЯ"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeTiming"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasTiming"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#FACC15"
+                                android:textSize="17sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="угол опережения °"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Row 5: Engine Load + F60 Idle Switch -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:baselineAligned="false"
+                        android:layout_marginBottom="6dp">
+
+                        <LinearLayout
+                            android:id="@+id/cardLoad"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="НАГРУЗКА"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeLoad"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasLoad"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#60A5FA"
+                                android:textSize="19sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="% расчётная"
+                                android:textColor="#64748B"
+                                android:textSize="10sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/cardIdleSwitch"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:layout_marginStart="3dp"
+                            android:orientation="vertical"
+                            android:background="#1E293B"
+                            android:padding="8dp"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="КОНЦЕВИК ДЗ (F60)"
+                                    android:textColor="#94A3B8"
+                                    android:textSize="10sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/tvBadgeIdleSwitch"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="+ график"
+                                    android:textColor="#64748B"
+                                    android:textSize="9sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvMeasIdleSwitch"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="---"
+                                android:textColor="#34D399"
+                                android:textSize="15sp"
+                                android:textStyle="bold"
+                                android:typeface="monospace"
+                                android:layout_marginTop="2dp" />
+
+                            <TextView
+                                android:id="@+id/tvMeasMode"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Режим: ---"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:layout_marginTop="2dp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Raw Groups / Debug Details -->
+                    <TextView
+                        android:id="@+id/tvMeasRawGroups"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="#020617"
+                        android:padding="8dp"
+                        android:text="Ожидание первых данных от ЭБУ..."
+                        android:textColor="#CBD5E1"
+                        android:textSize="10sp"
+                        android:typeface="monospace"
+                        android:lineSpacingExtra="2dp" />
+                </LinearLayout>
+            </ScrollView>
+        </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>

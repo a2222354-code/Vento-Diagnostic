@@ -5,15 +5,13 @@
 
 import React, { useState } from 'react';
 import {
-  Activity,
   Check,
   Copy,
   Cpu,
-  ExternalLink,
-  Flame,
+  Monitor,
   QrCode,
   Radio,
-  Share2,
+  Settings,
   Smartphone,
   Unplug,
   Usb,
@@ -22,10 +20,14 @@ import {
 import { ConnectionState, OperatingMode } from '../types/kw1281';
 import { usePWAInstall } from '../hooks/usePWAInstall';
 
+export type WebOrientationMode = 'auto' | 'portrait' | 'landscape';
+
 interface HeaderProps {
   connectionState: ConnectionState;
   mode: OperatingMode;
   onModeChange: (mode: OperatingMode) => void;
+  orientationMode: WebOrientationMode;
+  onOrientationChange: (orient: WebOrientationMode) => void;
   onConnect: () => void;
   onDisconnect: () => void;
   ecuPartNumber: string;
@@ -35,12 +37,17 @@ export const Header: React.FC<HeaderProps> = ({
   connectionState,
   mode,
   onModeChange,
+  orientationMode,
+  onOrientationChange,
   onConnect,
   onDisconnect,
   ecuPartNumber
 }) => {
   const { isInstallable, install } = usePWAInstall();
   const [showShareModal, setShowShareModal] = useState<boolean>(false);
+  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+  const [draftMode, setDraftMode] = useState<OperatingMode>(mode);
+  const [draftOrient, setDraftOrient] = useState<WebOrientationMode>(orientationMode);
   const [copied, setCopied] = useState<boolean>(false);
 
   const isConnected = connectionState === 'CONNECTED';
@@ -51,7 +58,18 @@ export const Header: React.FC<HeaderProps> = ({
     connectionState === 'SYNC_RECEIVED' ||
     connectionState === 'READING_TITLE';
 
-  // The active web app link
+  const openSettings = () => {
+    setDraftMode(mode);
+    setDraftOrient(orientationMode);
+    setShowSettingsModal(true);
+  };
+
+  const handleSaveSettings = () => {
+    onModeChange(draftMode);
+    onOrientationChange(draftOrient);
+    setShowSettingsModal(false);
+  };
+
   const webAppUrl =
     typeof window !== 'undefined' && window.location.origin.includes('http')
       ? window.location.origin
@@ -104,7 +122,7 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <>
       <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-40 px-3 sm:px-6 py-2.5">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-3">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-2.5">
           {/* Brand & Vehicle Context */}
           <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-start">
             <div className="flex items-center gap-2.5">
@@ -130,8 +148,16 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             </div>
 
-            {/* Mobile Actions: Share & Quick Connect */}
-            <div className="flex md:hidden items-center gap-2">
+            {/* Mobile Actions: Settings, Share & Quick Connect */}
+            <div className="flex md:hidden items-center gap-1.5">
+              <button
+                onClick={openSettings}
+                className="p-1.5 rounded-md bg-slate-800 text-slate-200 border border-slate-700"
+                title="Настройки подключения и экрана"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
+
               <button
                 onClick={() => setShowShareModal(true)}
                 className="p-1.5 rounded-md bg-slate-800 text-blue-400 border border-slate-700"
@@ -161,33 +187,23 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
 
-          {/* Operating Mode Selector & Hardware Status */}
-          <div className="flex items-center flex-wrap gap-2 sm:gap-3 w-full md:w-auto justify-between md:justify-end">
-            {/* Hardware Source Toggle */}
-            <div className="inline-flex rounded-lg bg-slate-950 p-0.5 border border-slate-800 text-xs">
-              <button
-                onClick={() => onModeChange('SIMULATOR')}
-                className={`px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1.5 ${
-                  mode === 'SIMULATOR'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Cpu className="w-3.5 h-3.5" />
-                <span>Эмулятор 3A0 907 311</span>
-              </button>
-              <button
-                onClick={() => onModeChange('USB_KKL')}
-                className={`px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1.5 ${
-                  mode === 'USB_KKL'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Usb className="w-3.5 h-3.5" />
-                <span>KKL FT232 (OTG)</span>
-              </button>
-            </div>
+          {/* Connection Status, Active Transport Summary & Settings Submenu */}
+          <div className="flex items-center flex-wrap gap-2 sm:gap-2.5 w-full md:w-auto justify-between md:justify-end">
+            {/* Active Mode Badge (Click to open Settings submenu) */}
+            <button
+              onClick={openSettings}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs transition-colors"
+              title="Настроить способ подключения и экран"
+            >
+              {mode === 'SIMULATOR' ? (
+                <Cpu className="w-3.5 h-3.5 text-blue-400" />
+              ) : (
+                <Usb className="w-3.5 h-3.5 text-emerald-400" />
+              )}
+              <span className="text-slate-200 font-medium">
+                {mode === 'SIMULATOR' ? 'Эмулятор ЭБУ' : 'KKL FT232 (OTG)'}
+              </span>
+            </button>
 
             {/* Connection Status indicator */}
             <div className="flex items-center gap-2 px-2.5 py-1 rounded-md bg-slate-950/70 border border-slate-800/80 text-xs">
@@ -195,14 +211,24 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="text-slate-300 font-medium">{getStateText()}</span>
             </div>
 
+            {/* Settings Submenu Button */}
+            <button
+              onClick={openSettings}
+              className="hidden md:flex px-2.5 py-1 text-xs font-medium rounded-md bg-slate-950 hover:bg-slate-800 text-slate-200 border border-slate-800 items-center gap-1.5 transition-colors"
+              title="Настройки подключения и автомагнитолы 7&quot;"
+            >
+              <Settings className="w-3.5 h-3.5 text-blue-400" />
+              <span>Настройки</span>
+            </button>
+
             {/* Share / Open on Phone Button */}
             <button
               onClick={() => setShowShareModal(true)}
-              className="px-2.5 py-1 text-xs font-medium rounded-md bg-slate-950 hover:bg-slate-800 text-blue-400 border border-slate-800 flex items-center gap-1.5 transition-colors"
+              className="hidden sm:flex px-2.5 py-1 text-xs font-medium rounded-md bg-slate-950 hover:bg-slate-800 text-blue-400 border border-slate-800 items-center gap-1.5 transition-colors"
               title="Открыть на телефоне через QR-код"
             >
               <QrCode className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Ссылка на Web</span>
+              <span className="hidden lg:inline">Ссылка на Web</span>
             </button>
 
             {/* Install PWA Button on Android / Chrome */}
@@ -217,7 +243,7 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             )}
 
-            {/* Desktop Connect / Disconnect Button */}
+            {/* Desktop / Head Unit Connect / Disconnect Button */}
             <div className="hidden md:flex items-center gap-2">
               {isConnected ? (
                 <button
@@ -242,6 +268,132 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </header>
 
+      {/* Settings Submenu Modal */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl relative">
+            <button
+              onClick={() => setShowSettingsModal(false)}
+              className="absolute top-4 right-4 p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-2.5 mb-4">
+              <div className="w-9 h-9 rounded-xl bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-blue-400">
+                <Settings className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-100">
+                  Настройки подключения и экрана
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Выбор сохраняется автоматически
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {/* Connection Source */}
+              <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3.5">
+                <div className="text-xs font-semibold text-slate-200 uppercase tracking-wider mb-2.5">
+                  1. Способ подключения
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setDraftMode('SIMULATOR')}
+                    className={`px-3 py-2.5 rounded-lg text-xs font-semibold border transition-colors flex items-center justify-center gap-1.5 ${
+                      draftMode === 'SIMULATOR'
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Cpu className="w-4 h-4 shrink-0" />
+                    <span>Эмулятор ЭБУ</span>
+                  </button>
+                  <button
+                    onClick={() => setDraftMode('USB_KKL')}
+                    className={`px-3 py-2.5 rounded-lg text-xs font-semibold border transition-colors flex items-center justify-center gap-1.5 ${
+                      draftMode === 'USB_KKL'
+                        ? 'bg-emerald-600 border-emerald-500 text-white'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Usb className="w-4 h-4 shrink-0" />
+                    <span>USB KKL (OTG)</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+                  {draftMode === 'SIMULATOR'
+                    ? 'Встроенный симулятор Bosch Mono-Motronic 1.2.3 для проверки приборов, графиков и протокола.'
+                    : 'Прямая работа с адаптером FT232 / CH340 через Web Serial API (Chrome на Android / автомагнитоле). Для Wi-Fi моста ESP32 используйте Android APK из вкладки «Android Studio Проект».'}
+                </p>
+              </div>
+
+              {/* Screen Orientation for Phone / 7" Head Unit */}
+              <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3.5">
+                <div className="text-xs font-semibold text-slate-200 uppercase tracking-wider mb-2.5">
+                  2. Экран (телефон / автомагнитола 7&quot;)
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    onClick={() => setDraftOrient('auto')}
+                    className={`px-2 py-2.5 rounded-lg text-xs font-semibold border transition-colors flex flex-col items-center justify-center gap-1 ${
+                      draftOrient === 'auto'
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Monitor className="w-4 h-4" />
+                    <span>Авто</span>
+                  </button>
+                  <button
+                    onClick={() => setDraftOrient('landscape')}
+                    className={`px-2 py-2.5 rounded-lg text-xs font-semibold border transition-colors flex flex-col items-center justify-center gap-1 ${
+                      draftOrient === 'landscape'
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Monitor className="w-4 h-4" />
+                    <span>7&quot; Гор.</span>
+                  </button>
+                  <button
+                    onClick={() => setDraftOrient('portrait')}
+                    className={`px-2 py-2.5 rounded-lg text-xs font-semibold border transition-colors flex flex-col items-center justify-center gap-1 ${
+                      draftOrient === 'portrait'
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Smartphone className="w-4 h-4" />
+                    <span>Верт.</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-2">
+                  В режиме «Авто» смартфон фиксируется вертикально, а широкоформатная 7&quot; автомагнитола (1024×600 / 1280×720) остаётся в горизонтальном виде.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  onClick={() => setShowSettingsModal(false)}
+                  className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors"
+                >
+                  Отмена
+                </button>
+                <button
+                  onClick={handleSaveSettings}
+                  className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors"
+                >
+                  Сохранить
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Share / Open on Phone Modal */}
       {showShareModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
@@ -261,7 +413,7 @@ export const Header: React.FC<HeaderProps> = ({
                 Ссылка на Web-версию
               </h3>
               <p className="text-xs text-slate-400 mt-1">
-                Отсканируйте камерой телефона (Ulefone Armor 21) или скопируйте ссылку:
+                Отсканируйте камерой телефона или скопируйте ссылку:
               </p>
             </div>
 
@@ -295,13 +447,13 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="mt-4 text-[11px] text-slate-400 space-y-1">
               <p>💡 <strong>Как подключить KKL адаптер:</strong></p>
               <p>
-                1. Откройте эту ссылку в <strong>Google Chrome</strong> на телефоне.
+                1. Откройте эту ссылку в <strong>Google Chrome</strong> на телефоне или автомагнитоле.
               </p>
               <p>
-                2. Подключите адаптер KKL FT232 через OTG-переходник.
+                2. Выберите «USB KKL (OTG)» в меню <strong>«Настройки»</strong> и подключите адаптер FT232.
               </p>
               <p>
-                3. Нажмите кнопку <strong>«Подключить»</strong> и подтвердите доступ к USB в Chrome!
+                3. Нажмите кнопку <strong>«Подключить»</strong> и подтвердите доступ к USB!
               </p>
             </div>
           </div>

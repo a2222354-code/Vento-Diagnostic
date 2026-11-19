@@ -15,7 +15,7 @@ import {
   Terminal,
   WifiOff
 } from 'lucide-react';
-import { Header } from './components/Header';
+import { Header, WebOrientationMode } from './components/Header';
 import { DashboardView } from './components/DashboardView';
 import { MeasuringGroupsView } from './components/MeasuringGroupsView';
 import { FaultCodesView } from './components/FaultCodesView';
@@ -33,10 +33,42 @@ import {
 import { kw1281 } from './services/kw1281Engine';
 import { generateMeasuringGroups } from './services/vagData';
 
+const ORIENT_STORAGE_KEY = 'vento_diag_orient';
+
+function applyWebOrientation(orient: WebOrientationMode) {
+  try {
+    const orientation = (window.screen as unknown as { orientation?: { lock?: (o: string) => Promise<void>; unlock?: () => void } }).orientation;
+    if (!orientation) return;
+    if (orient === 'portrait') {
+      orientation.lock?.('portrait')?.catch(() => {});
+    } else if (orient === 'landscape') {
+      orientation.lock?.('landscape')?.catch(() => {});
+    } else {
+      // Auto: only lock portrait on narrow portrait phones; keep 7" landscape car head units natural
+      if (window.innerHeight >= window.innerWidth && window.innerWidth < 768) {
+        orientation.lock?.('portrait')?.catch(() => {});
+      } else {
+        orientation.unlock?.();
+      }
+    }
+  } catch {
+    // Ignore on unsupported browsers
+  }
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [connectionState, setConnectionState] = useState<ConnectionState>(kw1281.getState());
   const [mode, setMode] = useState<OperatingMode>(kw1281.getMode());
+  const [orientationMode, setOrientationMode] = useState<WebOrientationMode>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(ORIENT_STORAGE_KEY) : null;
+      if (saved === 'auto' || saved === 'portrait' || saved === 'landscape') return saved;
+    } catch {
+      // Ignore storage errors
+    }
+    return 'auto';
+  });
   const [engineState, setEngineState] = useState<EngineLiveState>(kw1281.getEngineState());
   const [measuringGroups, setMeasuringGroups] = useState<MeasuringGroupData[]>(
     generateMeasuringGroups(kw1281.getEngineState())
@@ -61,13 +93,7 @@ export default function App() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Attempt portrait lock on mobile PWA/browsers that support Screen Orientation API
-    try {
-      const orientation = (window.screen as unknown as { orientation?: { lock?: (o: string) => Promise<void> } }).orientation;
-      orientation?.lock?.('portrait')?.catch(() => {});
-    } catch {
-      // Ignore on unsupported browsers
-    }
+    applyWebOrientation(orientationMode);
 
     // Initial simulated auto-connect for smooth onboarding
     kw1281.connect();
@@ -86,6 +112,16 @@ export default function App() {
   const handleModeChange = (newMode: OperatingMode) => {
     setMode(newMode);
     kw1281.setMode(newMode);
+  };
+
+  const handleOrientationChange = (newOrient: WebOrientationMode) => {
+    setOrientationMode(newOrient);
+    try {
+      window.localStorage.setItem(ORIENT_STORAGE_KEY, newOrient);
+    } catch {
+      // Ignore storage errors
+    }
+    applyWebOrientation(newOrient);
   };
 
   const tabs = [
@@ -109,6 +145,8 @@ export default function App() {
         connectionState={connectionState}
         mode={mode}
         onModeChange={handleModeChange}
+        orientationMode={orientationMode}
+        onOrientationChange={handleOrientationChange}
         onConnect={() => kw1281.connect()}
         onDisconnect={() => kw1281.disconnect()}
         ecuPartNumber={kw1281.ecuInfo.partNumber}

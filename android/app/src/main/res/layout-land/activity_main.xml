@@ -1,0 +1,784 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#090D16"
+    android:padding="10dp">
+
+    <!-- Compact Top Header for 7" Head Unit / Landscape -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="8dp">
+
+        <ImageView
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:src="@drawable/ic_launcher"
+            android:layout_marginEnd="10dp"
+            android:contentDescription="VW Vento" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="VENTO DIAGNOSTIC"
+                android:textColor="#38BDF8"
+                android:textSize="17sp"
+                android:textStyle="bold"
+                android:typeface="monospace" />
+
+            <TextView
+                android:id="@+id/tvSubtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="VW Vento 1995 1.8 ADZ • KWP1281"
+                android:textColor="#94A3B8"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvTransportBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:text="USB OTG"
+            android:textColor="#2DD4BF"
+            android:background="#0F172A"
+            android:paddingStart="9dp"
+            android:paddingEnd="9dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:typeface="monospace" />
+
+        <TextView
+            android:id="@+id/tvBaudBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="9600 бод"
+            android:textColor="#38BDF8"
+            android:background="#1E293B"
+            android:paddingStart="9dp"
+            android:paddingEnd="9dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:typeface="monospace" />
+    </LinearLayout>
+
+    <!-- 2-Column Body: Left Control Pad + Right Status & Diagnostic Results -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal"
+        android:baselineAligned="false">
+
+        <!-- Left Column: Scrollable ECU Tabs & Action Buttons -->
+        <ScrollView
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.02"
+            android:layout_marginEnd="8dp"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <!-- ECU Module Switcher Tabs -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginBottom="6dp">
+
+                    <Button
+                        android:id="@+id/btnTabEngine"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:breakStrategy="simple"
+                        android:hyphenationFrequency="none"
+                        android:maxLines="2"
+                        android:text="ДВИГАТЕЛЬ (01)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#0284C7"
+                        android:textColor="#FFFFFF" />
+
+                    <Button
+                        android:id="@+id/btnTabImmo"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:breakStrategy="simple"
+                        android:hyphenationFrequency="none"
+                        android:maxLines="2"
+                        android:text="ИММОБИЛАЙЗЕР (25)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#334155"
+                        android:textColor="#94A3B8" />
+                </LinearLayout>
+
+                <!-- Row 1: Connect ECU + Settings -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginBottom="6dp">
+
+                    <Button
+                        android:id="@+id/btnConnectEcu"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1.45"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ПОДКЛЮЧИТЬ ЭБУ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#10B981"
+                        android:textColor="#FFFFFF" />
+
+                    <Button
+                        android:id="@+id/btnOpenSettings"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="НАСТРОЙКИ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#334155"
+                        android:textColor="#E2E8F0" />
+                </LinearLayout>
+
+                <!-- Row 2: DTC Faults -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginBottom="6dp">
+
+                    <Button
+                        android:id="@+id/btnReadFaults"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ОШИБКИ (07)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#F59E0B"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false" />
+
+                    <Button
+                        android:id="@+id/btnClearFaults"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="СТЕРЕТЬ (05)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#EF4444"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false" />
+                </LinearLayout>
+
+                <!-- Row 3: Live Data & Actuator Test -->
+                <LinearLayout
+                    android:id="@+id/rowEngineDiagnostics"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginBottom="6dp">
+
+                    <Button
+                        android:id="@+id/btnMeasuring"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ИЗМЕРЕНИЯ (08)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#8B5CF6"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false" />
+
+                    <Button
+                        android:id="@+id/btnActuatorStart"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ИСПОЛНИТЕЛИ (04)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#7C3AED"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false" />
+                </LinearLayout>
+
+                <!-- Row 4: Basic Settings & Adaptation -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginBottom="6dp">
+
+                    <Button
+                        android:id="@+id/btnBasicSettings"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="БАЗОВЫЕ (УОЗ 6°)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#0D9488"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false" />
+
+                    <Button
+                        android:id="@+id/btnAdaptationOpen"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="АДАПТАЦИЯ (10)"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#2563EB"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false" />
+                </LinearLayout>
+
+                <!-- Row 5: ECU Passport & Share Report -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false">
+
+                    <Button
+                        android:id="@+id/btnEcuPassport"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ПАСПОРТ ЭБУ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#475569"
+                        android:textColor="#FFFFFF"
+                        android:enabled="false" />
+
+                    <Button
+                        android:id="@+id/btnShareReport"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="КОПИРОВАТЬ ОТЧЁТ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#1E293B"
+                        android:textColor="#38BDF8" />
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+
+        <!-- Right Column: Status, Contextual Panels & Diagnostic Results -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.15"
+            android:orientation="vertical">
+
+            <!-- Status Card -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#1E293B"
+                android:padding="9dp"
+                android:layout_marginBottom="6dp">
+
+                <TextView
+                    android:id="@+id/tvStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Статус: Ожидание подключения к ЭБУ"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvDeviceInfo"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Блок: Bosch Mono-Motronic 1.2.3 (3A0 907 311)"
+                    android:textColor="#38BDF8"
+                    android:textSize="11sp"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+            <!-- Immobilizer Status Card -->
+            <LinearLayout
+                android:id="@+id/layoutImmoStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#0F172A"
+                android:padding="9dp"
+                android:layout_marginBottom="6dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="СОСТОЯНИЕ ИММОБИЛАЙЗЕРА (1H0 953 257):"
+                    android:textColor="#38BDF8"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvImmoKeyStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• Транспондер ключа: Ожидание опроса..."
+                    android:textColor="#CBD5E1"
+                    android:textSize="11sp"
+                    android:layout_marginTop="2dp" />
+
+                <TextView
+                    android:id="@+id/tvImmoStartStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• Разрешение пуска двигателя: Не проверено"
+                    android:textColor="#CBD5E1"
+                    android:textSize="11sp"
+                    android:layout_marginTop="2dp" />
+
+                <TextView
+                    android:id="@+id/tvImmoKeyCount"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• Ключей обучено в памяти: ---"
+                    android:textColor="#CBD5E1"
+                    android:textSize="11sp"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+            <!-- Actuator Test Controls Card -->
+            <LinearLayout
+                android:id="@+id/layoutActuatorTest"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#1E1B4B"
+                android:padding="9dp"
+                android:layout_marginBottom="6dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/tvActuatorTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="ТЕСТ ИСПОЛНИТЕЛЬНЫХ МЕХАНИЗМОВ (0x04)"
+                    android:textColor="#A78BFA"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvActuatorDesc"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Запуск теста..."
+                    android:textColor="#FFFFFF"
+                    android:textSize="12sp"
+                    android:layout_marginTop="3dp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false"
+                    android:layout_marginTop="6dp">
+
+                    <Button
+                        android:id="@+id/btnActuatorNext"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="СЛЕДУЮЩИЙ ТЕСТ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#7C3AED"
+                        android:textColor="#FFFFFF" />
+
+                    <Button
+                        android:id="@+id/btnActuatorStop"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ЗАВЕРШИТЬ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#EF4444"
+                        android:textColor="#FFFFFF" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Adaptation Controls Card -->
+            <LinearLayout
+                android:id="@+id/layoutAdaptation"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#172554"
+                android:padding="9dp"
+                android:layout_marginBottom="6dp"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="АДАПТАЦИЯ БЛОКА (KWP1281)"
+                        android:textColor="#60A5FA"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+
+                    <Button
+                        android:id="@+id/btnAdaptClose"
+                        android:layout_width="wrap_content"
+                        android:layout_height="34dp"
+                        android:minHeight="0dp"
+                        android:minWidth="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:maxLines="1"
+                        android:text="Закрыть"
+                        android:textSize="11sp"
+                        android:backgroundTint="#1E293B"
+                        android:textColor="#94A3B8" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tvAdaptHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Канал 00: сброс выученных адаптаций / привязка ЭБУ"
+                    android:textColor="#CBD5E1"
+                    android:textSize="11sp"
+                    android:layout_marginTop="2dp"
+                    android:layout_marginBottom="6dp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginBottom="6dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="40dp"
+                        android:gravity="center"
+                        android:background="#0F172A"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:text="Канал: 00"
+                        android:textColor="#38BDF8"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:layout_marginEnd="8dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Значение:"
+                        android:textColor="#FFFFFF"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:layout_marginEnd="6dp" />
+
+                    <EditText
+                        android:id="@+id/etAdaptValue"
+                        android:layout_width="0dp"
+                        android:layout_height="40dp"
+                        android:layout_weight="1"
+                        android:background="#0F172A"
+                        android:text="0"
+                        android:textColor="#10B981"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:gravity="center"
+                        android:inputType="number"
+                        android:maxLength="5" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false">
+
+                    <Button
+                        android:id="@+id/btnAdaptRead"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="ЧИТАТЬ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#0284C7"
+                        android:textColor="#FFFFFF" />
+
+                    <Button
+                        android:id="@+id/btnAdaptSave"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:gravity="center"
+                        android:textAlignment="center"
+                        android:letterSpacing="0.02"
+                        android:maxLines="2"
+                        android:text="СОХРАНИТЬ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:backgroundTint="#10B981"
+                        android:textColor="#FFFFFF" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Diagnostic Results Display -->
+            <ScrollView
+                android:id="@+id/scrollViewResults"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:background="#020617"
+                android:padding="10dp">
+
+                <TextView
+                    android:id="@+id/tvResults"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#F1F5F9"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="3dp"
+                    android:text="Подключите USB KKL адаптер или выберите Wi-Fi (ESP32) в «НАСТРОЙКИ», включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ»." />
+            </ScrollView>
+        </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>

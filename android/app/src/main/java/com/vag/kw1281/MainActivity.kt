@@ -2,6 +2,7 @@ package com.vag.kw1281
 
 import android.app.Dialog
 import android.app.PendingIntent
+import android.app.UiModeManager
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -10,16 +11,20 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Point
 import android.graphics.drawable.GradientDrawable
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
+import android.view.Surface
 import android.view.View
 import android.view.Window
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -50,18 +55,28 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTabImmo: Button
     private var selectedEcuAddress: Int = 0x01 // 0x01 = Двигатель, 0x25 = Иммобилайзер
 
-    // Выбор транспорта: USB OTG или Wi-Fi (ESP32)
-    private lateinit var btnConnUsb: Button
-    private lateinit var btnConnWifi: Button
-    private lateinit var layoutWifiConfig: LinearLayout
-    private lateinit var etWifiHost: EditText
-    private lateinit var etWifiPort: EditText
+    // Настройки подключения и экрана (сохраняются в SharedPreferences)
+    private lateinit var tvTransportBadge: TextView
+    private lateinit var btnOpenSettings: Button
     private var isWifiMode: Boolean = false
+    private var wifiHost: String = "192.168.4.1"
+    private var wifiPort: Int = 3333
+    private var orientationMode: String = ORIENT_AUTO
+    private var keepScreenOn: Boolean = true
 
-    private val PREFS_NAME = "vento_diag_prefs"
-    private val PREF_WIFI_MODE = "use_wifi_esp32"
-    private val PREF_WIFI_HOST = "wifi_esp32_host"
-    private val PREF_WIFI_PORT = "wifi_esp32_port"
+    companion object {
+        private const val PREFS_NAME = "vento_diag_prefs"
+        private const val PREF_WIFI_MODE = "use_wifi_esp32"
+        private const val PREF_WIFI_HOST = "wifi_esp32_host"
+        private const val PREF_WIFI_PORT = "wifi_esp32_port"
+        private const val PREF_ORIENTATION_MODE = "screen_orientation_mode"
+        private const val PREF_KEEP_SCREEN_ON = "keep_screen_on"
+
+        private const val ORIENT_AUTO = "AUTO"
+        private const val ORIENT_PORTRAIT = "PORTRAIT"
+        private const val ORIENT_LANDSCAPE = "LANDSCAPE"
+        private const val ORIENT_SENSOR = "SENSOR"
+    }
 
     // Отдельное окно измерений и осциллограф
     private var measuringDialog: Dialog? = null
@@ -197,7 +212,17 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        isWifiMode = prefs.getBoolean(PREF_WIFI_MODE, false)
+        wifiHost = prefs.getString(PREF_WIFI_HOST, "192.168.4.1") ?: "192.168.4.1"
+        wifiPort = prefs.getInt(PREF_WIFI_PORT, 3333)
+        orientationMode = prefs.getString(PREF_ORIENTATION_MODE, ORIENT_AUTO) ?: ORIENT_AUTO
+        keepScreenOn = prefs.getBoolean(PREF_KEEP_SCREEN_ON, true)
+
+        applyOrientationPreference()
+        applyKeepScreenOnFlag()
+
         try {
             setContentView(R.layout.activity_main)
 
@@ -207,22 +232,13 @@ class MainActivity : AppCompatActivity() {
             tvStatus = findViewById(R.id.tvStatus)
             tvDeviceInfo = findViewById(R.id.tvDeviceInfo)
             tvBaudBadge = findViewById(R.id.tvBaudBadge)
+            tvTransportBadge = findViewById(R.id.tvTransportBadge)
             tvResults = findViewById(R.id.tvResults)
             scrollViewResults = findViewById(R.id.scrollViewResults)
 
             btnTabEngine = findViewById(R.id.btnTabEngine)
             btnTabImmo = findViewById(R.id.btnTabImmo)
-
-            btnConnUsb = findViewById(R.id.btnConnUsb)
-            btnConnWifi = findViewById(R.id.btnConnWifi)
-            layoutWifiConfig = findViewById(R.id.layoutWifiConfig)
-            etWifiHost = findViewById(R.id.etWifiHost)
-            etWifiPort = findViewById(R.id.etWifiPort)
-
-            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            isWifiMode = prefs.getBoolean(PREF_WIFI_MODE, false)
-            etWifiHost.setText(prefs.getString(PREF_WIFI_HOST, "192.168.4.1") ?: "192.168.4.1")
-            etWifiPort.setText(prefs.getInt(PREF_WIFI_PORT, 3333).toString())
+            btnOpenSettings = findViewById(R.id.btnOpenSettings)
 
             layoutImmoStatus = findViewById(R.id.layoutImmoStatus)
             tvImmoKeyStatus = findViewById(R.id.tvImmoKeyStatus)
@@ -253,11 +269,11 @@ class MainActivity : AppCompatActivity() {
             btnEcuPassport = findViewById(R.id.btnEcuPassport)
             btnShareReport = findViewById(R.id.btnShareReport)
 
-            // Переключение табов ЭБУ и способа подключения
+            // Переключение табов ЭБУ и подменю настроек
             btnTabEngine.setOnClickListener { switchEcuTab(0x01) }
             btnTabImmo.setOnClickListener { switchEcuTab(0x25) }
-            btnConnUsb.setOnClickListener { switchTransportMode(false) }
-            btnConnWifi.setOnClickListener { switchTransportMode(true) }
+            btnOpenSettings.setOnClickListener { openSettingsDialog() }
+            tvTransportBadge.setOnClickListener { openSettingsDialog() }
 
             // Обработчики кнопок
             btnConnectEcu.setOnClickListener { onConnectButtonClicked() }
@@ -357,6 +373,194 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun detectNaturalLandscape(): Boolean {
+        val uiModeManager = getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
+        if (uiModeManager?.currentModeType == Configuration.UI_MODE_TYPE_CAR) {
+            return true
+        }
+        if (resources.configuration.smallestScreenWidthDp >= 580) {
+            return true
+        }
+        return try {
+            val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            @Suppress("DEPRECATION")
+            val display = wm.defaultDisplay
+            val size = Point()
+            @Suppress("DEPRECATION")
+            display.getRealSize(size)
+            val rotation = display.rotation
+            if (rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270) {
+                size.y > size.x
+            } else {
+                size.x > size.y
+            }
+        } catch (_: Throwable) {
+            resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        }
+    }
+
+    private fun applyOrientationPreference() {
+        val target = when (orientationMode) {
+            ORIENT_PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            ORIENT_LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            ORIENT_SENSOR -> ActivityInfo.SCREEN_ORIENTATION_SENSOR
+            else -> if (detectNaturalLandscape()) {
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+        }
+        if (requestedOrientation != target) {
+            requestedOrientation = target
+        }
+    }
+
+    private fun applyKeepScreenOnFlag() {
+        if (keepScreenOn) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    private fun openSettingsDialog() {
+        val dialog = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dialog.setContentView(R.layout.dialog_settings)
+        dialog.window?.setLayout(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT
+        )
+        @Suppress("DEPRECATION")
+        dialog.window?.setSoftInputMode(
+            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN
+        )
+        if (keepScreenOn) {
+            dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+
+        val btnSetUsb = dialog.findViewById<Button>(R.id.btnSetUsb)
+        val btnSetWifi = dialog.findViewById<Button>(R.id.btnSetWifi)
+        val tvSetTransportHint = dialog.findViewById<TextView>(R.id.tvSetTransportHint)
+        val layoutSetWifiFields = dialog.findViewById<LinearLayout>(R.id.layoutSetWifiFields)
+        val etSetWifiHost = dialog.findViewById<EditText>(R.id.etSetWifiHost)
+        val etSetWifiPort = dialog.findViewById<EditText>(R.id.etSetWifiPort)
+
+        val btnOrientAuto = dialog.findViewById<Button>(R.id.btnOrientAuto)
+        val btnOrientLandscape = dialog.findViewById<Button>(R.id.btnOrientLandscape)
+        val btnOrientPortrait = dialog.findViewById<Button>(R.id.btnOrientPortrait)
+        val btnOrientSensor = dialog.findViewById<Button>(R.id.btnOrientSensor)
+        val tvOrientHint = dialog.findViewById<TextView>(R.id.tvOrientHint)
+        val cbKeepScreenOn = dialog.findViewById<CheckBox>(R.id.cbKeepScreenOn)
+
+        val btnSettingsCancel = dialog.findViewById<Button>(R.id.btnSettingsCancel)
+        val btnSettingsSave = dialog.findViewById<Button>(R.id.btnSettingsSave)
+
+        var draftWifi = isWifiMode
+        var draftOrient = orientationMode
+
+        etSetWifiHost.setText(wifiHost)
+        etSetWifiPort.setText(wifiPort.toString())
+        cbKeepScreenOn.isChecked = keepScreenOn
+
+        fun refreshTransportUi() {
+            if (draftWifi) {
+                btnSetWifi.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0F766E"))
+                btnSetWifi.setTextColor(Color.WHITE)
+                btnSetUsb.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#334155"))
+                btnSetUsb.setTextColor(Color.parseColor("#94A3B8"))
+                layoutSetWifiFields.visibility = View.VISIBLE
+                tvSetTransportHint.text = "Беспроводной мост Wi-Fi ESP32-S3 + USB KKL (подключитесь к сети VENTO-KKL-WIFI)."
+            } else {
+                btnSetUsb.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0F766E"))
+                btnSetUsb.setTextColor(Color.WHITE)
+                btnSetWifi.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#334155"))
+                btnSetWifi.setTextColor(Color.parseColor("#94A3B8"))
+                layoutSetWifiFields.visibility = View.GONE
+                tvSetTransportHint.text = "Прямое подключение USB KKL кабеля (FT232/CH340) к телефону или автомагнитоле."
+            }
+        }
+
+        fun styleOrientBtn(btn: Button, selected: Boolean) {
+            btn.backgroundTintList = ColorStateList.valueOf(
+                Color.parseColor(if (selected) "#0284C7" else "#334155")
+            )
+            btn.setTextColor(if (selected) Color.WHITE else Color.parseColor("#94A3B8"))
+        }
+
+        fun refreshOrientUi() {
+            styleOrientBtn(btnOrientAuto, draftOrient == ORIENT_AUTO)
+            styleOrientBtn(btnOrientLandscape, draftOrient == ORIENT_LANDSCAPE)
+            styleOrientBtn(btnOrientPortrait, draftOrient == ORIENT_PORTRAIT)
+            styleOrientBtn(btnOrientSensor, draftOrient == ORIENT_SENSOR)
+
+            tvOrientHint.text = when (draftOrient) {
+                ORIENT_LANDSCAPE -> "Горизонтальный 2-колоночный интерфейс для 7\" Android автомагнитол (1024×600 / 1280×720) и планшетов."
+                ORIENT_PORTRAIT -> "Фиксированный вертикальный режим для смартфонов (поворот экрана заблокирован)."
+                ORIENT_SENSOR -> "Свободный поворот экрана по датчику положения (телефон / автомагнитола)."
+                else -> "Авто: смартфон фиксируется вертикально, а 7\" автомагнитола открывается горизонтально в две колонки."
+            }
+        }
+
+        btnSetUsb.setOnClickListener {
+            draftWifi = false
+            refreshTransportUi()
+        }
+        btnSetWifi.setOnClickListener {
+            draftWifi = true
+            refreshTransportUi()
+        }
+
+        btnOrientAuto.setOnClickListener {
+            draftOrient = ORIENT_AUTO
+            refreshOrientUi()
+        }
+        btnOrientLandscape.setOnClickListener {
+            draftOrient = ORIENT_LANDSCAPE
+            refreshOrientUi()
+        }
+        btnOrientPortrait.setOnClickListener {
+            draftOrient = ORIENT_PORTRAIT
+            refreshOrientUi()
+        }
+        btnOrientSensor.setOnClickListener {
+            draftOrient = ORIENT_SENSOR
+            refreshOrientUi()
+        }
+
+        btnSettingsCancel.setOnClickListener { dialog.dismiss() }
+        btnSettingsSave.setOnClickListener {
+            val newHost = etSetWifiHost.text.toString().trim().ifEmpty { "192.168.4.1" }
+            val newPort = etSetWifiPort.text.toString().trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: 3333
+            val newKeepScreenOn = cbKeepScreenOn.isChecked
+
+            wifiHost = newHost
+            wifiPort = newPort
+            orientationMode = draftOrient
+            keepScreenOn = newKeepScreenOn
+
+            getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(PREF_WIFI_MODE, draftWifi)
+                .putString(PREF_WIFI_HOST, newHost)
+                .putInt(PREF_WIFI_PORT, newPort)
+                .putString(PREF_ORIENTATION_MODE, draftOrient)
+                .putBoolean(PREF_KEEP_SCREEN_ON, newKeepScreenOn)
+                .apply()
+
+            applyKeepScreenOnFlag()
+            switchTransportMode(draftWifi, resetSession = true)
+            dialog.dismiss()
+            applyOrientationPreference()
+            Toast.makeText(this, "Настройки сохранены", Toast.LENGTH_SHORT).show()
+        }
+
+        refreshTransportUi()
+        refreshOrientUi()
+        dialog.show()
+    }
+
     private fun switchTransportMode(wifi: Boolean, resetSession: Boolean = true) {
         if (resetSession && isWifiMode != wifi) {
             disconnectSession()
@@ -370,31 +574,27 @@ class MainActivity : AppCompatActivity() {
             .apply()
 
         if (wifi) {
-            btnConnWifi.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0F766E"))
-            btnConnWifi.setTextColor(Color.WHITE)
-            btnConnUsb.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#334155"))
-            btnConnUsb.setTextColor(Color.parseColor("#94A3B8"))
-            layoutWifiConfig.visibility = View.VISIBLE
+            tvTransportBadge.text = "WI-FI ESP32"
+            tvTransportBadge.setTextColor(Color.parseColor("#38BDF8"))
 
             if (kwProtocol?.isSessionActive != true) {
-                val host = etWifiHost.text.toString().trim().ifEmpty { "192.168.4.1" }
-                val port = etWifiPort.text.toString().trim().ifEmpty { "3333" }
+                val host = wifiHost.trim().ifEmpty { "192.168.4.1" }
+                val port = wifiPort.takeIf { it in 1..65535 } ?: 3333
                 tvStatus.text = "Статус: Wi-Fi мост ESP32 ($host:$port)"
-                setResultText("Режим беспроводного подключения через ESP32-S3 + USB KKL:\n\n" +
+                setResultText("Режим беспроводного подключения через ESP32-S3 + USB KKL ($host:$port):\n\n" +
                         "1. Подключите USB KKL кабель (FT232 / CH340) к порту USB-OTG платы ESP32-S3.\n" +
-                        "2. На телефоне подключитесь к Wi-Fi сети ESP32: VENTO-KKL-WIFI (пароль: ventokkl).\n" +
-                        "3. Включите зажигание автомобиля и нажмите «ПОДКЛЮЧИТЬ ЭБУ».")
+                        "2. На устройстве подключитесь к Wi-Fi сети ESP32: VENTO-KKL-WIFI (пароль: ventokkl).\n" +
+                        "3. Включите зажигание автомобиля и нажмите «ПОДКЛЮЧИТЬ ЭБУ».\n\n" +
+                        "Сменить способ подключения или IP/порт можно в меню «НАСТРОЙКИ».")
             }
         } else {
-            btnConnUsb.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#0F766E"))
-            btnConnUsb.setTextColor(Color.WHITE)
-            btnConnWifi.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#334155"))
-            btnConnWifi.setTextColor(Color.parseColor("#94A3B8"))
-            layoutWifiConfig.visibility = View.GONE
+            tvTransportBadge.text = "USB OTG"
+            tvTransportBadge.setTextColor(Color.parseColor("#2DD4BF"))
 
             if (kwProtocol?.isSessionActive != true) {
                 findUsbAdapter(autoRequestPermission = false)
-                setResultText("Режим прямого подключения через USB-OTG KKL кабель.\nПодключите кабель к телефону, включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ».")
+                setResultText("Режим прямого подключения через USB KKL кабель.\nПодключите кабель к устройству (смартфону или USB-порту автомагнитолы), включите зажигание и нажмите «ПОДКЛЮЧИТЬ ЭБУ».\n\n" +
+                        "Для работы по Wi-Fi (ESP32) откройте «НАСТРОЙКИ».")
             }
         }
     }
@@ -511,16 +711,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun connectToSelectedEcuViaWifi() {
-        val host = etWifiHost.text.toString().trim().ifEmpty { "192.168.4.1" }
-        val port = etWifiPort.text.toString().trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: 3333
-
-        etWifiHost.setText(host)
-        etWifiPort.setText(port.toString())
-        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putString(PREF_WIFI_HOST, host)
-            .putInt(PREF_WIFI_PORT, port)
-            .apply()
+        val host = wifiHost.trim().ifEmpty { "192.168.4.1" }
+        val port = wifiPort.takeIf { it in 1..65535 } ?: 3333
 
         lifecycleScope.launch {
             try {
@@ -614,7 +806,7 @@ class MainActivity : AppCompatActivity() {
         val manager = usbManager ?: return
         val dev = findUsbAdapter(autoRequestPermission = false)
         if (dev == null) {
-            setResultText("USB KKL адаптер не обнаружен.\n\n• Подключите кабель через USB-OTG переходник к телефону.\n• Либо переключитесь на вкладку «WI-FI (ESP32)» выше.")
+            setResultText("USB KKL адаптер не обнаружен.\n\n• Подключите кабель через USB-OTG переходник (или к USB автомагнитолы).\n• Либо откройте «НАСТРОЙКИ» и выберите «WI-FI (ESP32)».")
             return
         }
 
@@ -815,6 +1007,9 @@ class MainActivity : AppCompatActivity() {
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT
         )
+        if (keepScreenOn) {
+            dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
         measuringDialog = dialog
 
         val views = MeasuringWindowViews(dialog)
